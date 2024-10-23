@@ -20,7 +20,6 @@ import (
 // such as lock file path, log level, and verbosity. Additional functionalities like delete,
 // download, add, version, update, and verify commands are also registered.
 
-var verbose bool
 
 func NewRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -30,7 +29,6 @@ func NewRootCmd() *cobra.Command {
 	}
 	cmd.PersistentFlags().StringP("lock-file", "f", filepath.Join(getPwd(), GRAB_LOCK), "lockfile path (default: $PWD/grabit.lock")
 	cmd.PersistentFlags().StringP("log-level", "l", "info", "log level (trace, debug, info, warn, error, fatal)")
-	cmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output")
 
 	addDelete(cmd)
 	addDownload(cmd)
