@@ -49,7 +49,7 @@ func NewLock(path string, newOk bool) (*Lock, error) {
 	return &Lock{path: path, conf: conf}, nil
 }
 
-func (l *Lock) AddResource(paths []string, algo string, tags []string, filename string, dynamic bool) error {
+func (l *Lock) AddResource(paths []string, algo string, tags []string, filename string) error {
 	for _, u := range paths {
 		if l.Contains(u) {
 			return fmt.Errorf("resource '%s' is already present", u)
