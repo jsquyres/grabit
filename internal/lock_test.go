@@ -5,12 +5,14 @@ package internal
 
 import (
 	"fmt"
-	"github.com/cisco-open/grabit/test"
-	"github.com/stretchr/testify/assert"
 	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/cisco-open/grabit/test"
+	"github.com/stretchr/testify/assert"
+	
 )
 
 func TestNewLockInvalid(t *testing.T) {
