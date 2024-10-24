@@ -55,7 +55,7 @@ func (l *Lock) AddResource(paths []string, algo string, tags []string, filename 
 			return fmt.Errorf("resource '%s' is already present", u)
 		}
 	}
-	r, err := NewResourceFromUrl(paths, algo, tags, filename, dynamic)
+	r, err := NewResourceFromUrl(paths, algo, tags, filename)
 	if err != nil {
 		return err
 	}
@@ -93,50 +93,31 @@ func (l *Lock) Download(dir string, tags []string, notags []string, perm string)
 	if stat, err := os.Stat(dir); err != nil || !stat.IsDir() {
 		return fmt.Errorf("'%s' is not a directory", dir)
 	}
-	_, err := strToFileMode(perm)
+	mode, err := strToFileMode(perm)
 	if err != nil {
 		return fmt.Errorf("'%s' is not a valid permission definition", perm)
 	}
-
-	filteredResources := l.filterResources(tags, notags)
-
-	total := len(filteredResources)
-	if total == 0 {
-		return fmt.Errorf("nothing to download")
-	}
-
-	errorCh := make(chan error, total)
-	for _, r := range filteredResources {
-		resource := r
-		go func() {
-			err := resource.DownloadFile(resource.Urls[0], dir)
-			if err != nil {
-				errorCh <- fmt.Errorf("failed to download %s: %w", resource.Urls[0], err)
-			} else {
-				errorCh <- nil
-			}
-		}()
-	}
-
-	errs := []error{}
-	for i := 0; i < total; i++ {
-		if err := <-errorCh; err != nil {
-			errs = append(errs, err)
-		}
-	}
-
-	if len(errs) > 0 {
-		return errors.Join(errs...)
-	}
-	return nil
-}
-
-func (l *Lock) filterResources(tags []string, notags []string) []Resource {
-	tagFilteredResources := l.conf.Resource
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// Filter in the resources that have all the required tags.
+	tagFilteredResources := []Resource{}
 	if len(tags) > 0 {
-		tagFilteredResources = []Resource{}
-		for _, r := range l.conf.Resource {
-			if r.hasAllTags(tags) {
+			for _, r := range l.conf.Resource {
+			hasAllTags := true
+			for _, tag := range tags {
+				hasTag := false
+				for _, rtag := range r.Tags {
+					if tag == rtag {
+						hasTag = true
+						break
+					}
+				}
+				if !hasTag {
+					hasAllTags = false
+					break
+				}
+			}
+			if hasAllTags {
 				tagFilteredResources = append(tagFilteredResources, r)
 			}
 		}
