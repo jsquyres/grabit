@@ -42,15 +42,13 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	dynamic, err := cmd.Flags().GetBool("dynamic")
+	err = lock.AddResource(args, algo, tags, filename)
 	if err != nil {
 		return err
 	}
-
-	err = lock.AddResource(args, algo, tags, filename, dynamic)
+	err = lock.Save()
 	if err != nil {
 		return err
 	}
-
-	return lock.Save()
+	return nil
 }
