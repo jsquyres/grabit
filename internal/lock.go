@@ -26,12 +26,6 @@ type config struct {
 	Resource []Resource
 }
 
-type resource struct {
-	Urls      []string
-	Integrity string
-	Tags      []string
-}
-
 func NewLock(path string, newOk bool) (*Lock, error) {
 	_, error := os.Stat(path)
 	if os.IsNotExist(error) {
@@ -245,5 +239,4 @@ func (l *Lock) Contains(url string) bool {
 		}
 	}
 	return false
-
 }
