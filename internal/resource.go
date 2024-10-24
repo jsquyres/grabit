@@ -100,7 +100,6 @@ func (l *Resource) Download(dir string, mode os.FileMode, ctx context.Context) e
 		err = checkIntegrityFromFile(lpath, algo, l.Integrity, u)
 		if err != nil {
 			return err
-
 		}
 
 		localName := ""
@@ -120,6 +119,17 @@ func (l *Resource) Download(dir string, mode os.FileMode, ctx context.Context) e
 				return err
 			}
 		}
+		ok = true
+	}
+	if !ok {
+		if err == nil {
+			if downloadError != nil {
+				return downloadError
+			} else {
+				panic("no error but no file downloaded")
+			}
+		}
+		return err
 	}
 	return nil
 }
@@ -131,65 +141,4 @@ func (l *Resource) Contains(url string) bool {
 		}
 	}
 	return false
-}
-
-func calculateFileHash(filePath string) (string, error) {
-	file, err := os.Open(filePath)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return "", err
-	}
-
-	return base64.StdEncoding.EncodeToString(hash.Sum(nil)), nil
-}
-
-func (l *Resource) DownloadFile(url, targetDir string) error {
-	fileName := filepath.Base(url)
-	targetPath := filepath.Join(targetDir, fileName)
-	duplicateCount := 0
-
-	if _, err := os.Stat(targetPath); err == nil {
-		fileHash, err := calculateFileHash(targetPath)
-		if err == nil && fileHash == l.Integrity {
-			duplicateCount++
-			log.Info().Str("File", fileName).Msg("Existing file verified with correct hash")
-			return nil
-		}
-	}
-
-	resp, err := http.Get(url)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	out, err := os.Create(targetPath)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	_, err = io.Copy(out, resp.Body)
-	if err != nil {
-		return err
-	}
-
-	downloadedHash, err := calculateFileHash(targetPath)
-	if err != nil {
-		return err
-	}
-	if downloadedHash != l.Integrity {
-		return fmt.Errorf("hash mismatch: expected %s, got %s", l.Integrity, downloadedHash)
-	}
-
-	if duplicateCount > 0 {
-		log.Info().Int("duplicates", duplicateCount).Msg("Duplicate files found during download")
-	}
-
-	return nil
 }
