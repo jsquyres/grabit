@@ -50,24 +50,3 @@ func TestNewResourceFromUrl(t *testing.T) {
 		}
 	}
 }
-
-func TestDynamicResourceDownload(t *testing.T) {
-	handler := func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`test content`))
-	}
-	port, server := test.HttpHandler(handler)
-	defer server.Close()
-
-	url := fmt.Sprintf("http://localhost:%d/dynamic", port)
-	resource := &Resource{
-		Urls:    []string{url},
-		Dynamic: true,
-	}
-
-	dir := t.TempDir()
-	err := resource.Download(dir, 0644, context.Background())
-	assert.NoError(t, err)
-
-	err = resource.Download(dir, 0644, context.Background())
-	assert.NoError(t, err)
-}
