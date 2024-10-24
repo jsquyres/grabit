@@ -78,7 +78,6 @@ func checkIntegrityFromUrl(url string, expectedIntegrity string) error {
 	return checkIntegrityFromFile(tempFile, algo, expectedIntegrity, url)
 }
 
-// GetUrlToDir downloads the given resource to the given directory and returns the path to it.
 func GetUrlToDir(u string, targetDir string, ctx context.Context) (string, error) {
 	// create temporary name in the target directory.
 	h := sha256.New()
@@ -87,7 +86,6 @@ func GetUrlToDir(u string, targetDir string, ctx context.Context) (string, error
 	return getUrl(u, fileName, ctx)
 }
 
-// GetUrlWithDir downloads the given resource to a temporary file and returns the path to it.
 func GetUrltoTempFile(u string, ctx context.Context) (string, error) {
 	file, err := os.CreateTemp("", "prefix")
 	if err != nil {
@@ -99,14 +97,20 @@ func GetUrltoTempFile(u string, ctx context.Context) (string, error) {
 
 func (l *Resource) Download(dir string, mode os.FileMode, ctx context.Context) error {
 		ok := false
-		algo, err := 
-	getAlgoFromIntegrity(l.Integrity)
-		if err != nil {
-			return err
-		}
-		var downloadError error = nil
-		for _, u := range l.Urls {
-		err := l.DownloadFile(u, dir)
+	algo, err := getAlgoFromIntegrity(l.Integrity)
+	if err != nil {
+		return err
+	}
+	var downloadError error = nil
+	for _, u := range l.Urls {
+		// Download file in the target directory so that the call to
+		// os.Rename is atomic.
+		lpath, err := GetUrlToDir(u, dir, ctx)
+	if err != nil {
+		downloadError = err
+		break
+	}
+	err = checkIntegrityFromFile(lpath, algo, l.Integrity, u)
 		if err != nil {
 			continue
 		}
@@ -156,7 +160,6 @@ func (l *Resource) DownloadFile(url, targetDir string) error {
 	targetPath := filepath.Join(targetDir, fileName)
 	duplicateCount := 0
 
-	// Check for existing file and hash before download
 	if _, err := os.Stat(targetPath); err == nil {
 		fileHash, err := calculateFileHash(targetPath)
 		if err == nil && fileHash == l.Integrity {
@@ -166,7 +169,6 @@ func (l *Resource) DownloadFile(url, targetDir string) error {
 		}
 	}
 
-	// Download and verify new file
 	resp, err := http.Get(url)
 	if err != nil {
 		return err
