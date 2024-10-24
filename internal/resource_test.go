@@ -6,10 +6,11 @@ package internal
 import (
 	"context"
 	"fmt"
-	"github.com/cisco-open/grabit/test"
-	"github.com/stretchr/testify/assert"
 	"net/http"
 	"testing"
+	
+	"github.com/cisco-open/grabit/test"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestNewResourceFromUrl(t *testing.T) {
@@ -41,7 +42,7 @@ func TestNewResourceFromUrl(t *testing.T) {
 	}
 
 	for _, data := range tests {
-		resource, err := NewResourceFromUrl(data.urls, "sha256", []string{}, "", false)
+		resource, err := NewResourceFromUrl(data.urls, algo, []string{}, "")
 		assert.Equal(t, data.valid, err == nil)
 		if err != nil {
 			assert.Contains(t, err.Error(), data.errorContains)
@@ -68,7 +69,6 @@ func TestDynamicResourceDownload(t *testing.T) {
 	err := resource.Download(dir, 0644, context.Background())
 	assert.NoError(t, err)
 
-	// Download again to ensure it doesn't fail due to content change
 	err = resource.Download(dir, 0644, context.Background())
 	assert.NoError(t, err)
 }
