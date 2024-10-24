@@ -9,11 +9,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// This Go code defines a command-line interface (CLI) command for downloading resources.
-// It uses the Cobra library to create a command called "download" with various flags
-// to customize the download process, such as specifying the target directory,
-// filtering by tags, setting file permissions, and enabling verbose output.
-
 func addDownload(cmd *cobra.Command) {
 	downloadCmd := &cobra.Command{
 		Use:   "download",
@@ -28,11 +23,6 @@ func addDownload(cmd *cobra.Command) {
 	downloadCmd.Flags().BoolP("verbose", "v", false, "Enable verbose output")
 	cmd.AddCommand(downloadCmd)
 }
-
-// Summary: The runFetch function handles the download process by configuring logging levels,
-// managing a lock file, and retrieving various command-line arguments such as directory,
-// tags, and permissions. It sets up a context for the downloader and initiates the download
-// process while logging relevant information at different stages.
 
 func runFetch(cmd *cobra.Command, args []string) error {
 	logLevel, _ := cmd.Flags().GetString("log-level")
