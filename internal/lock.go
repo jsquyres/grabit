@@ -97,12 +97,13 @@ func (l *Lock) Download(dir string, tags []string, notags []string, perm string)
 	if err != nil {
 		return fmt.Errorf("'%s' is not a valid permission definition", perm)
 	}
+	
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	// Filter in the resources that have all the required tags.
 	tagFilteredResources := []Resource{}
 	if len(tags) > 0 {
-			for _, r := range l.conf.Resource {
+		for _, r := range l.conf.Resource {
 			hasAllTags := true
 			for _, tag := range tags {
 				hasTag := false
@@ -121,11 +122,12 @@ func (l *Lock) Download(dir string, tags []string, notags []string, perm string)
 				tagFilteredResources = append(tagFilteredResources, r)
 			}
 		}
+		} else {
+		tagFilteredResources = l.conf.Resource
 	}
-
-	filteredResources := tagFilteredResources
+	// Filter out the resources that have any 'notag' tag.
+	filteredResources := []Resource{}
 	if len(notags) > 0 {
-		filteredResources = []Resource{}
 		for _, r := range tagFilteredResources {
 			if !r.hasAnyTag(notags) {
 				filteredResources = append(filteredResources, r)
