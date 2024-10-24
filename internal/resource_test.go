@@ -4,11 +4,10 @@
 package internal
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"testing"
-	
+
 	"github.com/cisco-open/grabit/test"
 	"github.com/stretchr/testify/assert"
 )
