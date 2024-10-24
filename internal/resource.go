@@ -6,11 +6,8 @@ package internal
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"os"
 	"path"
@@ -27,14 +24,12 @@ type Resource struct {
 	Integrity string
 	Tags      []string `toml:",omitempty"`
 	Filename  string   `toml:",omitempty"`
-	Dynamic   bool     `toml:",omitempty"`
 }
 
-func NewResourceFromUrl(urls []string, algo string, tags []string, filename string, dynamic bool) (*Resource, error) {
+func NewResourceFromUrl(urls []string, algo string, tags []string, filename string) (*Resource, error) {
 	if len(urls) < 1 {
 		return nil, fmt.Errorf("empty url list")
 	}
-
 	url := urls[0]
 	ctx := context.Background()
 	path, err := GetUrltoTempFile(url, ctx)
@@ -48,7 +43,7 @@ func NewResourceFromUrl(urls []string, algo string, tags []string, filename stri
 	}
 	return &Resource{Urls: urls, Integrity: integrity, Tags: tags, Filename: filename}, nil
 }
-
+// getUrl downloads the given resource and returns the path to it.
 func getUrl(u string, fileName string, ctx context.Context) (string, error) {
 	_, err := url.Parse(u)
 	if err != nil {
@@ -66,7 +61,7 @@ func getUrl(u string, fileName string, ctx context.Context) (string, error) {
 	log.Debug().Str("URL", u).Msg("Downloaded")
 	return fileName, nil
 }
-
+// GetUrlToDir downloads the given resource to the given directory and returns the path to it.
 func checkIntegrityFromUrl(url string, expectedIntegrity string) error {
 	tempFile, err := GetUrltoTempFile(url, context.Background())
 	if err != nil {
@@ -119,12 +114,10 @@ func (l *Resource) Download(dir string, mode os.FileMode, ctx context.Context) e
 				return err
 			}
 		}
-		return nil
 	}
-	return fmt.Errorf("failed to download resource from any URL")
+	return nil
 }
 
-// this method checks if a given URL is present in the URL list of the resource
 func (l *Resource) Contains(url string) bool {
 	for _, u := range l.Urls {
 		if u == url {
