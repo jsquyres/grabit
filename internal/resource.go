@@ -93,21 +93,27 @@ func (l *Resource) Download(dir string, mode os.FileMode, ctx context.Context) e
 		// Download file in the target directory so that the call to
 		// os.Rename is atomic.
 		lpath, err := GetUrlToDir(u, dir, ctx)
-	if err != nil {
-		downloadError = err
-		break
-	}
-	err = checkIntegrityFromFile(lpath, algo, l.Integrity, u)
 		if err != nil {
-			continue
+			downloadError = err
+			break
+		}
+		err = checkIntegrityFromFile(lpath, algo, l.Integrity, u)
+		if err != nil {
+			return err
+
 		}
 
-		localName := l.Filename
-		if localName == "" {
+		localName := ""
+		if l.Filename != "" {
+			localName = l.Filename
+		} else {
 			localName = path.Base(u)
 		}
 		resPath := filepath.Join(dir, localName)
-
+		err = os.Rename(lpath, resPath)
+		if err != nil {
+			return err
+		}
 		if mode != NoFileMode {
 			err = os.Chmod(resPath, mode.Perm())
 			if err != nil {
