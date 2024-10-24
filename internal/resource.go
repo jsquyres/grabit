@@ -63,6 +63,7 @@ func getUrl(u string, fileName string, ctx context.Context) (string, error) {
 	return fileName, nil
 }
 
+// GetUrlToDir downloads the given resource to the given directory and returns the path to it.
 func checkIntegrityFromUrl(url string, expectedIntegrity string) error {
 	tempFile, err := GetUrltoTempFile(url, context.Background())
 	if err != nil {
@@ -78,6 +79,7 @@ func checkIntegrityFromUrl(url string, expectedIntegrity string) error {
 	return checkIntegrityFromFile(tempFile, algo, expectedIntegrity, url)
 }
 
+// GetUrlWithDir downloads the given resource to a temporary file and returns the path to it.
 func GetUrlToDir(u string, targetDir string, ctx context.Context) (string, error) {
 	// create temporary name in the target directory.
 	h := sha256.New()
@@ -96,7 +98,7 @@ func GetUrltoTempFile(u string, ctx context.Context) (string, error) {
 }
 
 func (l *Resource) Download(dir string, mode os.FileMode, ctx context.Context) error {
-		ok := false
+	ok := false
 	algo, err := getAlgoFromIntegrity(l.Integrity)
 	if err != nil {
 		return err
