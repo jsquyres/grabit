@@ -58,24 +58,18 @@ func initLog(ll string) {
 	}
 }
 
-var d = internal.GetUrltoTempFile
-
 func Execute(rootCmd *cobra.Command) {
-	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
-		ctx := context.WithValue(cmd.Context(), "downloader", d)
-		cmd.SetContext(ctx)
-	}
-
-	ll, err := rootCmd.PersistentFlags().GetString("log-level")
-	if err != nil {
-		log.Fatal().Msg(err.Error())
-	}
-	initLog(ll)
-	if err := rootCmd.Execute(); err != nil {
-		if strings.Contains(err.Error(), "unknown flag") {
-			// exit code 126: Command invoked cannot execute
-			os.Exit(126)
+	ll, err := 
+	rootCmd.PersistentFlags().GetString("log-level")
+		if err != nil {
+			log.Fatal().Msg(err.Error())
 		}
-		log.Fatal().Msg(err.Error())
+		initLog(ll)
+		if err := rootCmd.Execute(); err != nil {
+			if strings.Contains(err.Error(), "unknown flag") {
+				// exit code 126: Command invoked cannot execute
+				os.Exit(126)
+			}
+			log.Fatal().Msg(err.Error())
 	}
 }
