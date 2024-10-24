@@ -66,11 +66,9 @@ func TestDuplicateResource(t *testing.T) {
 		[[Resource]]
 		Urls = ['%s']
 		Integrity = 'sha256-asdasdasd'`, url))
-       Urls = ['%s']
-       Integrity = 'sha256-asdasdasd'`, url))
 	lock, err := NewLock(path, false)
 	assert.Nil(t, err)
-	err = lock.AddResource([]string{url}, "sha512", []string{}, "", false)
+	err = lock.AddResource([]string{url}, "sha512", []string{}, "")
 	assert.NotNil(t, err)
 	assert.Contains(t, err.Error(), "already present")
 }
@@ -109,9 +107,9 @@ func TestDownload(t *testing.T) {
 	port, server := test.HttpHandler(handler)
 	defer server.Close()
 	path := test.TmpFile(t, fmt.Sprintf(`
-        [[Resource]]
-        Urls = ['http://localhost:%d/test.html']
-        Integrity = 'sha256-vvV+x/U6bUC+tkCngKY5yDvCmsipgW8fxsXG3Nk8RyE='`, port))
+ 		[[Resource]]
+		Urls = ['http://localhost:%d/test.html']
+		Integrity = 'sha256-vvV+x/U6bUC+tkCngKY5yDvCmsipgW8fxsXG3Nk8RyE='`, port))
 	perm := "467"
 	strPerm := "-r--rw-rwx"
 	lock, err := NewLock(path, false)
