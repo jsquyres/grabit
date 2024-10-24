@@ -43,6 +43,7 @@ func NewResourceFromUrl(urls []string, algo string, tags []string, filename stri
 	}
 	return &Resource{Urls: urls, Integrity: integrity, Tags: tags, Filename: filename}, nil
 }
+
 // getUrl downloads the given resource and returns the path to it.
 func getUrl(u string, fileName string, ctx context.Context) (string, error) {
 	_, err := url.Parse(u)
@@ -61,6 +62,7 @@ func getUrl(u string, fileName string, ctx context.Context) (string, error) {
 	log.Debug().Str("URL", u).Msg("Downloaded")
 	return fileName, nil
 }
+
 // GetUrlToDir downloads the given resource to the given directory and returns the path to it.
 func checkIntegrityFromUrl(url string, expectedIntegrity string) error {
 	tempFile, err := GetUrltoTempFile(url, context.Background())
@@ -96,7 +98,14 @@ func GetUrltoTempFile(u string, ctx context.Context) (string, error) {
 }
 
 func (l *Resource) Download(dir string, mode os.FileMode, ctx context.Context) error {
-	for _, u := range l.Urls {
+		ok := false
+		algo, err := 
+	getAlgoFromIntegrity(l.Integrity)
+		if err != nil {
+			return err
+		}
+		var downloadError error = nil
+		for _, u := range l.Urls {
 		err := l.DownloadFile(u, dir)
 		if err != nil {
 			continue
