@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+
 func getSha256Integrity(content string) string {
 	hasher := sha256.New()
 	hasher.Write([]byte(content))
