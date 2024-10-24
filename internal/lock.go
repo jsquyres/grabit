@@ -129,38 +129,47 @@ func (l *Lock) Download(dir string, tags []string, notags []string, perm string)
 	filteredResources := []Resource{}
 	if len(notags) > 0 {
 		for _, r := range tagFilteredResources {
-			if !r.hasAnyTag(notags) {
+			hasTag := false
+			for _, notag := range notags {
+				for _, rtag := range r.Tags {
+					if notag == rtag {
+						hasTag = true
+					}
+				}
+			}
+			if !hasTag {
+
 				filteredResources = append(filteredResources, r)
 			}
 		}
+	} else {
+		filteredResources = tagFilteredResources
 	}
 
-	return filteredResources
-}
-
-func (r *Resource) hasAllTags(tags []string) bool {
-	for _, tag := range tags {
-		if !r.hasTag(tag) {
-			return false
+	total := len(filteredResources)
+	if total == 0 {
+		return fmt.Errorf("nothing to download")
+	}
+	errorCh := make(chan error, total)
+	for _, r := range filteredResources {
+		resource := r
+		go func() {
+			err := resource.Download(dir, mode, ctx)
+			errorCh <- err
+		}()
+	}
+	done := 0
+	errs := []error{}
+	for range total {
+		err = <-errorCh
+		if err != nil {
+			errs = append(errs, err)
+		} else {
+			done += 1
 		}
 	}
-	return true
-}
-
-func (r *Resource) hasAnyTag(tags []string) bool {
-	for _, tag := range tags {
-		if r.hasTag(tag) {
-			return true
-		}
-	}
-	return false
-}
-
-func (r *Resource) hasTag(tag string) bool {
-	for _, rtag := range r.Tags {
-		if tag == rtag {
-			return true
-		}
+	if done == total {
+		return nil
 	}
 	return false
 }
