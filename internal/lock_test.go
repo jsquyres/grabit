@@ -107,7 +107,7 @@ func TestDownload(t *testing.T) {
 	port, server := test.HttpHandler(handler)
 	defer server.Close()
 	path := test.TmpFile(t, fmt.Sprintf(`
- 		[[Resource]]
+		[[Resource]]
 		Urls = ['http://localhost:%d/test.html']
 		Integrity = 'sha256-vvV+x/U6bUC+tkCngKY5yDvCmsipgW8fxsXG3Nk8RyE='`, port))
 	perm := "467"
