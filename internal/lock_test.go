@@ -12,7 +12,6 @@ import (
 
 	"github.com/cisco-open/grabit/test"
 	"github.com/stretchr/testify/assert"
-	
 )
 
 func TestNewLockInvalid(t *testing.T) {
@@ -52,7 +51,7 @@ func TestLockManipulations(t *testing.T) {
 	port, server := test.HttpHandler(handler)
 	defer server.Close()
 	resource := fmt.Sprintf("http://localhost:%d/test2.html", port)
-	err = lock.AddResource([]string{resource}, "sha512", []string{}, "", false)
+	err = lock.AddResource([]string{resource}, "sha512", []string{}, "")
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(lock.conf.Resource))
 	err = lock.Save()
@@ -64,7 +63,9 @@ func TestLockManipulations(t *testing.T) {
 func TestDuplicateResource(t *testing.T) {
 	url := "http://localhost:123456/test.html"
 	path := test.TmpFile(t, fmt.Sprintf(`
-       [[Resource]]
+		[[Resource]]
+		Urls = ['%s']
+		Integrity = 'sha256-asdasdasd'`, url))
        Urls = ['%s']
        Integrity = 'sha256-asdasdasd'`, url))
 	lock, err := NewLock(path, false)
