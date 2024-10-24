@@ -59,17 +59,16 @@ func initLog(ll string) {
 }
 
 func Execute(rootCmd *cobra.Command) {
-	ll, err := 
-	rootCmd.PersistentFlags().GetString("log-level")
-		if err != nil {
-			log.Fatal().Msg(err.Error())
+	ll, err := rootCmd.PersistentFlags().GetString("log-level")
+	if err != nil {
+		log.Fatal().Msg(err.Error())
+	}
+	initLog(ll)
+	if err := rootCmd.Execute(); err != nil {
+		if strings.Contains(err.Error(), "unknown flag") {
+			// exit code 126: Command invoked cannot execute
+			os.Exit(126)
 		}
-		initLog(ll)
-		if err := rootCmd.Execute(); err != nil {
-			if strings.Contains(err.Error(), "unknown flag") {
-				// exit code 126: Command invoked cannot execute
-				os.Exit(126)
-			}
-			log.Fatal().Msg(err.Error())
+		log.Fatal().Msg(err.Error())
 	}
 }
