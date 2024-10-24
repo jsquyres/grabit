@@ -138,7 +138,6 @@ func (l *Lock) Download(dir string, tags []string, notags []string, perm string)
 				}
 			}
 			if !hasTag {
-
 				filteredResources = append(filteredResources, r)
 			}
 		}
@@ -171,31 +170,8 @@ func (l *Lock) Download(dir string, tags []string, notags []string, perm string)
 	if done == total {
 		return nil
 	}
-	return false
-}
-
-func (l *Lock) UpdateResource(url string) error {
-	for i, r := range l.conf.Resource {
-		if r.Contains(url) {
-			newResource, err := NewResourceFromUrl(r.Urls, r.Integrity, r.Tags, r.Filename, r.Dynamic)
-			if err != nil {
-				return err
-			}
-			l.conf.Resource[i] = *newResource
-			return l.Save()
-		}
-	}
-	return fmt.Errorf("resource with URL '%s' not found", url)
-}
-
-func (l *Lock) VerifyIntegrity() error {
-	for _, r := range l.conf.Resource {
-		for _, url := range r.Urls {
-			err := checkIntegrityFromUrl(url, r.Integrity)
-			if err != nil {
-				return fmt.Errorf("integrity check failed for %s: %w", url, err)
-			}
-		}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
 	}
 	return nil
 }
