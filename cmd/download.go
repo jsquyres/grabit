@@ -56,14 +56,12 @@ func runFetch(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Ensure ARTIFACTORY_TOKEN is set if cache URLs require it (new part starts here)
+	// Check ARTIFACTORY_TOKEN only if cache URLs require it
+	cache, _ := cmd.Flags().GetString("cache")
 	token := os.Getenv("ARTIFACTORY_TOKEN")
-	if token == "" {
-		log.Warn().Msg("ARTIFACTORY_TOKEN is not set; any cache URLs requiring authentication may fail.")
-	} else {
-		log.Debug().Msg("ARTIFACTORY_TOKEN is set; proceeding with potential cache authentication.")
+	if cache != "" && token == "" {
+		return fmt.Errorf("ARTIFACTORY_TOKEN must be set when using cache")
 	}
-	// New part ends here
 
 	// Proceed with the downloading logic
 	err = lock.Download(dir, tags, notags, perm)
