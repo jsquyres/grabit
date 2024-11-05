@@ -18,6 +18,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+var COMMENT_PREFIX = "//"
+
 // Lock represents a grabit lockfile.
 type Lock struct {
 	path string
@@ -35,20 +37,22 @@ func NewLock(path string, newOk bool) (*Lock, error) {
 		if newOk {
 			return &Lock{path: path, conf: config{Resource: []Resource{}}}, nil
 		} else {
-			return nil, fmt.Errorf("file '%s' does not exist", path)
+			return nil, fmt.Errorf("lock file '%s' does not exist", path)
 		}
+	} else if error != nil {
+		return nil, fmt.Errorf("failed to access lock file '%s': %w", path, error)
 	}
 
 	var conf config
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open lock file '%s': %w", path, err)
 	}
 	defer file.Close()
 
 	d := toml.NewDecoder(file)
 	if err := d.Decode(&conf); err != nil {
-		return nil, fmt.Errorf("failed to decode lock file: %w", err)
+		return nil, fmt.Errorf("failed to decode lock file '%s': %w", path, err)
 	}
 
 	return &Lock{path: path, conf: conf}, nil
