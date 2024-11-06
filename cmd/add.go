@@ -4,11 +4,11 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io/ioutil"
 	"net/http"
 	"os"
-	"strings"
 
 	"github.com/cisco-open/grabit/internal"
 	"github.com/rs/zerolog/log"
@@ -19,14 +19,14 @@ func addAdd(cmd *cobra.Command) {
 	addCmd := &cobra.Command{
 		Use:   "add [url]",
 		Short: "Add new resource",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MinimumNArgs(1), // Keeping MinimumNArgs as multiple URLs are allowed
 		RunE:  runAdd,
 	}
 
+	addCmd.Flags().String("cache", "", "Artifactory cache URL")
 	addCmd.Flags().String("algo", internal.RecommendedAlgo, "Integrity algorithm")
-	addCmd.Flags().String("filename", "", "Target file name to use when downloading the resource")
+	addCmd.Flags().String("filename", "", "Target file name")
 	addCmd.Flags().StringArray("tag", []string{}, "Resource tags")
-	addCmd.Flags().String("cache", "", "URL of Artifactory cache")
 
 	cmd.AddCommand(addCmd)
 }
@@ -35,121 +35,107 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	// Get flags
 	lockFile, err := cmd.Flags().GetString("lock-file")
 	if err != nil {
-		return fmt.Errorf("failed to get lock-file flag: %w", err)
+		return err
 	}
 
 	algo, err := cmd.Flags().GetString("algo")
 	if err != nil {
-		return fmt.Errorf("failed to get algo flag: %w", err)
+		return err
 	}
 
 	tags, err := cmd.Flags().GetStringArray("tag")
 	if err != nil {
-		return fmt.Errorf("failed to get tag flag: %w", err)
+		return err
 	}
 
 	filename, err := cmd.Flags().GetString("filename")
 	if err != nil {
-		return fmt.Errorf("failed to get filename flag: %w", err)
+		return err
 	}
 
 	cache, err := cmd.Flags().GetString("cache")
 	if err != nil {
-		return fmt.Errorf("failed to get cache flag: %w", err)
+		return err
 	}
 
-	// Validate cache configuration
+	// Check cache configuration first
 	if cache != "" {
-		// If cache URL is provided, authentication is required
 		token := os.Getenv("ARTIFACTORY_TOKEN")
 		if token == "" {
 			return fmt.Errorf("ARTIFACTORY_TOKEN must be set when using cache")
 		}
-		log.Debug().
-			Str("cache_url", cache).
-			Msg("Artifactory cache configured")
 	}
 
 	// Create or open lock file
 	lock, err := internal.NewLock(lockFile, true)
 	if err != nil {
-		return fmt.Errorf("failed to create/open lock file: %w", err)
+		return err
 	}
 
-	// Check if resource is local file
-	isLocal := !strings.HasPrefix(args[0], "http://") && !strings.HasPrefix(args[0], "https://")
-	if isLocal && cache != "" {
-		log.Debug().
-			Str("file", args[0]).
-			Str("cache", cache).
-			Msg("Uploading local file to Artifactory")
+	// If cache is specified, download and upload to Artifactory first
+	if cache != "" {
+		log.Debug().Msg("Downloading resource for cache")
+		// Download the file first
+		tempFile, err := internal.GetUrltoTempFile(args[0], context.Background())
+		if err != nil {
+			return fmt.Errorf("failed to download resource: %w", err)
+		}
+		defer os.Remove(tempFile)
 
-		if err := uploadToArtifactory(args[0], cache); err != nil {
-			return fmt.Errorf("failed to upload to Artifactory: %w", err)
+		// Upload to Artifactory
+		log.Debug().Msg("Uploading to Artifactory cache")
+		if err := uploadToArtifactory(tempFile, cache); err != nil {
+			return fmt.Errorf("failed to upload to cache: %w", err)
 		}
 	}
 
 	// Add resource to lock file
 	if err := lock.AddResourceWithCache(args, algo, tags, filename, cache); err != nil {
-		return fmt.Errorf("failed to add resource: %w", err)
+		return err
 	}
 
 	// Save changes
 	if err := lock.Save(); err != nil {
-		return fmt.Errorf("failed to save lock file: %w", err)
+		return err
 	}
 
-	log.Debug().
-		Str("url", args[0]).
-		Str("cache", cache).
-		Msg("Resource added successfully")
-
+	log.Debug().Msg("Resource added successfully")
 	return nil
 }
 
 // uploadToArtifactory uploads a file to Artifactory
 func uploadToArtifactory(filePath, cacheUrl string) error {
-	// Get authentication token
 	token := os.Getenv("ARTIFACTORY_TOKEN")
 	if token == "" {
-		return fmt.Errorf("ARTIFACTORY_TOKEN is not set")
+		return fmt.Errorf("ARTIFACTORY_TOKEN must be set")
 	}
 
-	// Read file
 	fileData, err := ioutil.ReadFile(filePath)
 	if err != nil {
-		return fmt.Errorf("failed to read file: %w", err)
+		return err
 	}
 
-	// Create request
 	req, err := http.NewRequest(http.MethodPut, cacheUrl, bytes.NewReader(fileData))
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return err
 	}
 
-	// Set headers
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(fileData)))
 
-	// Send request
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to execute request: %w", err)
+		return err
 	}
 	defer resp.Body.Close()
 
-	// Check response
-	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusCreated {
 		body, _ := ioutil.ReadAll(resp.Body)
 		return fmt.Errorf("upload failed (status %d): %s", resp.StatusCode, string(body))
 	}
 
-	log.Debug().
-		Str("file", filePath).
-		Str("url", cacheUrl).
-		Msg("File uploaded to Artifactory")
-
+	log.Debug().Msg("File uploaded to Artifactory")
 	return nil
 }
