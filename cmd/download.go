@@ -1,14 +1,10 @@
 // Copyright (c) 2023 Cisco Systems, Inc. and its affiliates
 // All rights reserved.
-
 package cmd
 
 import (
-	"fmt" // Import for formatted I/O
-	"os"  // Import for environment variables
-
 	"github.com/cisco-open/grabit/internal"
-	"github.com/rs/zerolog/log" // Import for logging (debug statements)
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
@@ -33,42 +29,37 @@ func runFetch(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Open lock file as a local file, not a URL
 	lock, err := internal.NewLock(lockFile, false)
 	if err != nil {
-		return fmt.Errorf("failed to open lock file '%s': %w", lockFile, err)
+		return err
 	}
 
 	dir, err := cmd.Flags().GetString("dir")
 	if err != nil {
 		return err
 	}
+
 	tags, err := cmd.Flags().GetStringArray("tag")
 	if err != nil {
 		return err
 	}
+
 	notags, err := cmd.Flags().GetStringArray("notag")
 	if err != nil {
 		return err
 	}
+
 	perm, err := cmd.Flags().GetString("perm")
 	if err != nil {
 		return err
 	}
 
-	// Check ARTIFACTORY_TOKEN only if cache URLs require it
-	cache, _ := cmd.Flags().GetString("cache")
-	token := os.Getenv("ARTIFACTORY_TOKEN")
-	if cache != "" && token == "" {
-		return fmt.Errorf("ARTIFACTORY_TOKEN must be set when using cache")
+	// Download resources
+	if err := lock.Download(dir, tags, notags, perm); err != nil {
+		// Pass through the original error to maintain error details
+		return err
 	}
 
-	// Proceed with the downloading logic
-	err = lock.Download(dir, tags, notags, perm)
-	if err != nil {
-		return fmt.Errorf("failed to download resources: %w", err)
-	}
-
-	log.Info().Msg("Download completed successfully")
+	log.Debug().Msg("Download completed successfully")
 	return nil
 }

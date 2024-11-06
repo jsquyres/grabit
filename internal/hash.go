@@ -1,6 +1,5 @@
 // Copyright (c) 2023 Cisco Systems, Inc. and its affiliates
 // All rights reserved.
-
 package internal
 
 import (
@@ -11,12 +10,73 @@ import (
 	"encoding/hex"
 	"fmt"
 	"hash"
+	"io"
 	"os"
 	"strings"
 )
 
-// getAuthToken retrieves the ARTIFACTORY_TOKEN from environment variables.
-// Returns the token with "Bearer" prefix or an error if the token is not set.
+// Constants for hash formats
+const (
+	FormatSRI    = "SRI"
+	FormatHex    = "HEX"
+	FormatBase64 = "BASE64"
+)
+
+var (
+	// Available hash algorithms
+	algos = map[string]Hasher{
+		"sha1":   sha1.New,
+		"sha256": sha256.New,
+		"sha384": sha512.New384,
+		"sha512": sha512.New,
+	}
+
+	RecommendedAlgo = "sha256"
+	allAlgos        string
+)
+
+// Hasher defines a function that returns a hash.Hash
+type Hasher func() hash.Hash
+
+// Hash struct encapsulates a hashing algorithm
+type Hash struct {
+	algo string
+	hash Hasher
+}
+
+// Init initializes the available algorithms
+func init() {
+	initAlgoList()
+}
+
+// initAlgoList initializes the list of available algorithms
+func initAlgoList() {
+	algoNames := make([]string, 0, len(algos))
+	foundRecommendedAlgo := false
+
+	for algo := range algos {
+		algoNames = append(algoNames, algo)
+		if RecommendedAlgo == algo {
+			foundRecommendedAlgo = true
+		}
+	}
+
+	allAlgos = strings.Join(algoNames, ", ")
+	if !foundRecommendedAlgo {
+		panic(fmt.Sprintf("cannot find recommended algorithm '%s'", RecommendedAlgo))
+	}
+}
+
+// NewHash creates a new Hash instance
+func NewHash(algo string) (*Hash, error) {
+	hash, ok := algos[algo]
+	if !ok {
+		return nil, fmt.Errorf("unknown hash algorithm '%s' (available: %s)", algo, allAlgos)
+	}
+	return &Hash{algo: algo, hash: hash}, nil
+}
+
+// getAuthToken retrieves the Artifactory token
 func getAuthToken() (string, error) {
 	token := os.Getenv("ARTIFACTORY_TOKEN")
 	if token == "" {
@@ -25,87 +85,122 @@ func getAuthToken() (string, error) {
 	return "Bearer " + token, nil
 }
 
-var algos = map[string]Hasher{
-	"sha1":   sha1.New,
-	"sha256": sha256.New,
-	"sha384": sha512.New384,
-	"sha512": sha512.New,
+// HashFormat represents the format of a hash string
+type HashFormat struct {
+	Format    string
+	Algorithm string
+	Value     string
 }
 
-var RecommendedAlgo = "sha256"
-
-// Hasher defines a function that returns a hash.Hash.
-type Hasher func() hash.Hash
-
-// Hash struct encapsulates a hashing algorithm.
-type Hash struct {
-	algo string
-	hash Hasher
-}
-
-// Initialize the available algorithms list.
-var allAlgos string
-
-// init initializes the list of available algorithms.
-func init() {
-	initAlgoList()
-}
-
-// initAlgoList initializes the list of available algorithms and verifies the recommended algorithm.
-func initAlgoList() {
-	algoNames := make([]string, 0, len(algos))
-	foundRecommendedAlgo := false
-	for algo := range algos {
-		algoNames = append(algoNames, algo)
-		if RecommendedAlgo == algo {
-			foundRecommendedAlgo = true
+// ParseHash parses a hash string into its components
+func ParseHash(hash string) (*HashFormat, error) {
+	// Check for SRI format
+	if strings.Contains(hash, "-") {
+		parts := strings.SplitN(hash, "-", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid SRI format")
 		}
+		return &HashFormat{
+			Format:    FormatSRI,
+			Algorithm: parts[0],
+			Value:     parts[1],
+		}, nil
 	}
-	allAlgos = strings.Join(algoNames, ", ")
-	if !foundRecommendedAlgo {
-		panic(fmt.Sprintf("cannot find recommended algorithm '%s'", RecommendedAlgo))
+
+	// Determine format based on content
+	if len(hash) == 64 && isHex(hash) {
+		return &HashFormat{
+			Format:    FormatHex,
+			Algorithm: RecommendedAlgo,
+			Value:     hash,
+		}, nil
 	}
+
+	if isBase64(hash) {
+		return &HashFormat{
+			Format:    FormatBase64,
+			Algorithm: RecommendedAlgo,
+			Value:     hash,
+		}, nil
+	}
+
+	return nil, fmt.Errorf("unknown hash format")
 }
 
-// NewHash creates a new Hash instance with the specified algorithm.
-func NewHash(algo string) (*Hash, error) {
-	hash, ok := algos[algo]
-	if !ok {
-		return nil, fmt.Errorf("unknown hash algorithm '%s' (available algorithms: %s)", algo, allAlgos)
-	}
-	return &Hash{algo: algo, hash: hash}, nil
-}
-
-// decodeIntegrity decodes a hash from a hex or base64 encoding, depending on its format.
-func decodeIntegrity(integrity string) ([]byte, error) {
-	// Detect encoding based on the integrity string length and prefix.
-	if strings.HasPrefix(integrity, "sha256-") {
-		// If it's prefixed with 'sha256-', treat it as base64 encoded (SRI format).
-		base64Part := strings.TrimPrefix(integrity, "sha256-")
-		return base64.StdEncoding.DecodeString(base64Part)
-	} else if len(integrity) == 64 {
-		// Treat as hex encoded hash (commonly used in sha256).
-		return hex.DecodeString(integrity)
-	} else if len(integrity) == 44 {
-		// Treat as base64 encoded hash.
-		return base64.StdEncoding.DecodeString(integrity)
-	}
-	return nil, fmt.Errorf("unknown integrity format: %s", integrity)
-}
-
-// CompareHash compares a provided integrity hash with a computed hash for verification.
-func (h *Hash) CompareHash(integrity string, data []byte) (bool, error) {
-	// Decode the integrity hash based on its format
-	expectedHash, err := decodeIntegrity(integrity)
+// NormalizeHash converts any hash format to SRI format
+func NormalizeHash(hash string) (string, error) {
+	format, err := ParseHash(hash)
 	if err != nil {
-		return false, fmt.Errorf("failed to decode integrity hash: %w", err)
+		return "", fmt.Errorf("failed to parse hash: %w", err)
 	}
 
-	// Compute the actual hash for the provided data
-	hasher := h.hash()
-	hasher.Write(data)
-	actualHash := hasher.Sum(nil)
+	switch format.Format {
+	case FormatSRI:
+		return hash, nil
+	case FormatHex:
+		decoded, err := hex.DecodeString(format.Value)
+		if err != nil {
+			return "", fmt.Errorf("invalid hex hash: %w", err)
+		}
+		b64 := base64.StdEncoding.EncodeToString(decoded)
+		return fmt.Sprintf("%s-%s", format.Algorithm, b64), nil
+	case FormatBase64:
+		return fmt.Sprintf("%s-%s", format.Algorithm, format.Value), nil
+	default:
+		return "", fmt.Errorf("unsupported hash format")
+	}
+}
 
-	// Compare computed hash with the expected hash
-	return string(actualHash) == string(expectedHash), nil
+// CompareHash compares two hashes in any format
+func (h *Hash) CompareHash(expected string, actual []byte) (bool, error) {
+	// Normalize expected hash
+	expectedNorm, err := NormalizeHash(expected)
+	if err != nil {
+		return false, fmt.Errorf("invalid expected hash: %w", err)
+	}
+
+	// Compute actual hash
+	hasher := h.hash()
+	hasher.Write(actual)
+	actualBytes := hasher.Sum(nil)
+	actualB64 := base64.StdEncoding.EncodeToString(actualBytes)
+	actualSRI := fmt.Sprintf("%s-%s", h.algo, actualB64)
+
+	return expectedNorm == actualSRI, nil
+}
+
+// VerifyFileIntegrity verifies a file's integrity
+func (h *Hash) VerifyFileIntegrity(path string, expected string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("failed to open file: %w", err)
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return fmt.Errorf("failed to read file: %w", err)
+	}
+
+	match, err := h.CompareHash(expected, data)
+	if err != nil {
+		return fmt.Errorf("failed to compare hashes: %w", err)
+	}
+
+	if !match {
+		return fmt.Errorf("integrity check failed")
+	}
+
+	return nil
+}
+
+// Helper functions
+func isHex(s string) bool {
+	_, err := hex.DecodeString(s)
+	return err == nil && len(s)%2 == 0
+}
+
+func isBase64(s string) bool {
+	_, err := base64.StdEncoding.DecodeString(s)
+	return err == nil
 }
