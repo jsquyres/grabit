@@ -9,6 +9,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/cisco-open/grabit/internal"
 	"github.com/rs/zerolog/log"
@@ -19,7 +20,7 @@ func addAdd(cmd *cobra.Command) {
 	addCmd := &cobra.Command{
 		Use:   "add [url]",
 		Short: "Add new resource",
-		Args:  cobra.MinimumNArgs(1), // Keeping MinimumNArgs as multiple URLs are allowed
+		Args:  cobra.MinimumNArgs(1),
 		RunE:  runAdd,
 	}
 
@@ -58,11 +59,11 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Check cache configuration first
+	// Check for GRABIT_ARTIFACTORY_TOKEN if cache is specified
 	if cache != "" {
-		token := os.Getenv("ARTIFACTORY_TOKEN")
+		token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
 		if token == "" {
-			return fmt.Errorf("ARTIFACTORY_TOKEN must be set when using cache")
+			return fmt.Errorf("GRABIT_ARTIFACTORY_TOKEN must be set when using cache")
 		}
 	}
 
@@ -72,70 +73,88 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// If cache is specified, download and upload to Artifactory first
-	if cache != "" {
-		log.Debug().Msg("Downloading resource for cache")
-		// Download the file first
-		tempFile, err := internal.GetUrltoTempFile(args[0], context.Background())
-		if err != nil {
-			return fmt.Errorf("failed to download resource: %w", err)
-		}
-		defer os.Remove(tempFile)
+	// Download file first
+	ctx := context.Background()
+	tempFile, err := internal.GetUrltoTempFile(args[0], ctx)
+	if err != nil {
+		return fmt.Errorf("failed to download resource: %w", err)
+	}
+	defer os.Remove(tempFile)
 
-		// Upload to Artifactory
-		log.Debug().Msg("Uploading to Artifactory cache")
-		if err := uploadToArtifactory(tempFile, cache); err != nil {
-			return fmt.Errorf("failed to upload to cache: %w", err)
+	// Calculate hash for integrity and cache path
+	hash, err := internal.GetFileHash(tempFile)
+	if err != nil {
+		return fmt.Errorf("failed to calculate file hash: %w", err)
+	}
+
+	// Handle cache if specified
+	var cachePath string
+	if cache != "" {
+		// Ensure cache URL ends with a single /
+		cache = strings.TrimSuffix(cache, "/") + "/"
+		cachePath = cache + hash
+
+		log.Debug().
+			Str("path", cachePath).
+			Msg("Uploading to Artifactory cache")
+
+		if err := uploadToArtifactory(tempFile, cachePath); err != nil {
+			log.Debug().
+				Err(err).
+				Str("path", cachePath).
+				Msg("Failed to upload to cache")
+			// Continue without cache - this is not a fatal error
+		} else {
+			log.Debug().
+				Str("path", cachePath).
+				Msg("Successfully uploaded to cache")
 		}
 	}
 
 	// Add resource to lock file
-	if err := lock.AddResourceWithCache(args, algo, tags, filename, cache); err != nil {
-		return err
+	if err := lock.AddResourceWithCache(args, algo, tags, filename, cachePath); err != nil {
+		return fmt.Errorf("failed to add resource to lock file: %w", err)
 	}
 
-	// Save changes
-	if err := lock.Save(); err != nil {
-		return err
-	}
-
-	log.Debug().Msg("Resource added successfully")
-	return nil
+	return lock.Save()
 }
 
-// uploadToArtifactory uploads a file to Artifactory
 func uploadToArtifactory(filePath, cacheUrl string) error {
-	token := os.Getenv("ARTIFACTORY_TOKEN")
+	token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
 	if token == "" {
-		return fmt.Errorf("ARTIFACTORY_TOKEN must be set")
+		return fmt.Errorf("GRABIT_ARTIFACTORY_TOKEN must be set")
 	}
 
+	// Read file content
 	fileData, err := ioutil.ReadFile(filePath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to read file: %w", err)
 	}
 
+	// Create request
 	req, err := http.NewRequest(http.MethodPut, cacheUrl, bytes.NewReader(fileData))
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create request: %w", err)
 	}
 
+	// Set headers
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(fileData)))
 
+	// Make request
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to upload to Artifactory: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusCreated {
+	// Check response
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
 		body, _ := ioutil.ReadAll(resp.Body)
 		return fmt.Errorf("upload failed (status %d): %s", resp.StatusCode, string(body))
 	}
 
-	log.Debug().Msg("File uploaded to Artifactory")
 	return nil
 }
