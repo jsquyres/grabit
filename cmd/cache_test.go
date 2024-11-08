@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,6 +22,7 @@ func TestGrabitRequirements(t *testing.T) {
 		token := r.Header.Get("Authorization")
 		if token != "Bearer test-token" {
 			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprintln(w, "Unauthorized")
 			return
 		}
 		switch r.Method {
@@ -33,93 +35,135 @@ func TestGrabitRequirements(t *testing.T) {
 	defer artifactoryServer.Close()
 
 	tests := []struct {
-		name        string
-		commands    [][]string
-		setupEnv    map[string]string
-		expectError bool
-		errorMsg    string
-		verify      func(*testing.T, string)
+		name     string
+		commands []struct {
+			args        []string
+			setupEnv    map[string]string
+			expectError bool
+			errorMsg    string
+		}
 	}{
 		{
-			// Requirement: Check if GRABIT_ARTIFACTORY_TOKEN is set
 			name: "Token validation",
-			commands: [][]string{
-				{"add", "--lock-file", "LOCKFILE", "SOURCE_URL", "--cache", "CACHE_URL"},
+			commands: []struct {
+				args        []string
+				setupEnv    map[string]string
+				expectError bool
+				errorMsg    string
+			}{
+				{
+					args:        []string{"add", "--lock-file", "LOCKFILE", "SOURCE_URL", "--cache", "CACHE_URL"},
+					setupEnv:    map[string]string{},
+					expectError: true,
+					errorMsg:    "GRABIT_ARTIFACTORY_TOKEN must be set when using cache",
+				},
 			},
-			setupEnv:    map[string]string{},
-			expectError: true,
-			errorMsg:    "GRABIT_ARTIFACTORY_TOKEN must be set when using cache",
 		},
 		{
-			// Requirement: Cache download attempt first
-			name: "Cache download priority",
-			commands: [][]string{
-				{"add", "--lock-file", "LOCKFILE", "SOURCE_URL", "--cache", "CACHE_URL"},
-				{"download", "--lock-file", "LOCKFILE"},
+			name: "Cache download flow",
+			commands: []struct {
+				args        []string
+				setupEnv    map[string]string
+				expectError bool
+				errorMsg    string
+			}{
+				{
+					args: []string{"add", "--lock-file", "LOCKFILE", "SOURCE_URL", "--cache", "CACHE_URL"},
+					setupEnv: map[string]string{
+						"GRABIT_ARTIFACTORY_TOKEN": "test-token",
+					},
+					expectError: false,
+				},
+				{
+					args: []string{"download", "--lock-file", "LOCKFILE"},
+					setupEnv: map[string]string{
+						"GRABIT_ARTIFACTORY_TOKEN": "test-token",
+					},
+					expectError: false,
+				},
 			},
-			setupEnv: map[string]string{
-				"GRABIT_ARTIFACTORY_TOKEN": "test-token",
-			},
-			expectError: false,
 		},
 		{
-			// Requirement: Fallback to source URL if cache fails
-			name: "Cache fallback behavior",
-			commands: [][]string{
-				{"add", "--lock-file", "LOCKFILE", "SOURCE_URL", "--cache", "INVALID_CACHE"},
-				{"download", "--lock-file", "LOCKFILE"},
+			name: "Fallback to source",
+			commands: []struct {
+				args        []string
+				setupEnv    map[string]string
+				expectError bool
+				errorMsg    string
+			}{
+				{
+					args: []string{"add", "--lock-file", "LOCKFILE", "SOURCE_URL", "--cache", "CACHE_URL"},
+					setupEnv: map[string]string{
+						"GRABIT_ARTIFACTORY_TOKEN": "test-token",
+					},
+					expectError: false,
+				},
+				{
+					args:        []string{"download", "--lock-file", "LOCKFILE"},
+					setupEnv:    map[string]string{},
+					expectError: false,
+				},
 			},
-			setupEnv: map[string]string{
-				"GRABIT_ARTIFACTORY_TOKEN": "test-token",
-			},
-			expectError: false,
 		},
 		{
-			// Requirement: Upload to cache after source download
-			name: "Cache upload after download",
-			commands: [][]string{
-				{"add", "--lock-file", "LOCKFILE", "SOURCE_URL", "--cache", "CACHE_URL"},
+			name: "NO_CACHE_UPLOAD behavior",
+			commands: []struct {
+				args        []string
+				setupEnv    map[string]string
+				expectError bool
+				errorMsg    string
+			}{
+				{
+					args: []string{"add", "--lock-file", "LOCKFILE", "SOURCE_URL", "--cache", "CACHE_URL"},
+					setupEnv: map[string]string{
+						"GRABIT_ARTIFACTORY_TOKEN": "test-token",
+						"NO_CACHE_UPLOAD":          "1",
+					},
+					expectError: false,
+				},
 			},
-			setupEnv: map[string]string{
-				"GRABIT_ARTIFACTORY_TOKEN": "test-token",
-			},
-			expectError: false,
 		},
 		{
-			// Requirement: NO_CACHE_UPLOAD prevents cache upload
-			name: "NO_CACHE_UPLOAD handling",
-			commands: [][]string{
-				{"add", "--lock-file", "LOCKFILE", "SOURCE_URL", "--cache", "CACHE_URL"},
-			},
-			setupEnv: map[string]string{
-				"GRABIT_ARTIFACTORY_TOKEN": "test-token",
-				"NO_CACHE_UPLOAD":          "1",
-			},
-			expectError: false,
-		},
-		{
-			// Requirement: Hash validation
-			name: "Cache integrity validation",
-			commands: [][]string{
-				{"add", "--lock-file", "LOCKFILE", "SOURCE_URL", "--cache", "CACHE_URL"},
-				{"download", "--lock-file", "LOCKFILE"},
-			},
-			setupEnv: map[string]string{
-				"GRABIT_ARTIFACTORY_TOKEN": "test-token",
-			},
-			expectError: false,
-		},
-		{
-			// Requirement: Multiple URL support
 			name: "Multiple URLs with cache",
-			commands: [][]string{
-				{"add", "--lock-file", "LOCKFILE", "SOURCE_URL", "SOURCE_URL2", "--cache", "CACHE_URL"},
-				{"download", "--lock-file", "LOCKFILE"},
+			commands: []struct {
+				args        []string
+				setupEnv    map[string]string
+				expectError bool
+				errorMsg    string
+			}{
+				{
+					args: []string{"add", "--lock-file", "LOCKFILE", "SOURCE_URL", "SOURCE_URL2", "--cache", "CACHE_URL"},
+					setupEnv: map[string]string{
+						"GRABIT_ARTIFACTORY_TOKEN": "test-token",
+					},
+					expectError: false,
+				},
+				{
+					args: []string{"download", "--lock-file", "LOCKFILE"},
+					setupEnv: map[string]string{
+						"GRABIT_ARTIFACTORY_TOKEN": "test-token",
+					},
+					expectError: false,
+				},
 			},
-			setupEnv: map[string]string{
-				"GRABIT_ARTIFACTORY_TOKEN": "test-token",
+		},
+		{
+			name: "Invalid URLs",
+			commands: []struct {
+				args        []string
+				setupEnv    map[string]string
+				expectError bool
+				errorMsg    string
+			}{
+				{
+					args: []string{"add", "--lock-file", "LOCKFILE", "INVALID_URL", "--cache", "CACHE_URL"},
+					setupEnv: map[string]string{
+						"GRABIT_ARTIFACTORY_TOKEN": "test-token",
+					},
+					expectError: true,
+					errorMsg:    "failed to download",
+				},
 			},
-			expectError: false,
 		},
 	}
 
@@ -129,39 +173,33 @@ func TestGrabitRequirements(t *testing.T) {
 			tmpDir := t.TempDir()
 			lockFile := filepath.Join(tmpDir, "grabit.lock")
 
-			// Setup environment
-			origEnv := make(map[string]string)
-			for k, v := range tt.setupEnv {
-				if oldVal, exists := os.LookupEnv(k); exists {
-					origEnv[k] = oldVal
+			for _, cmd := range tt.commands {
+				// Clear environment
+				if os.Getenv("GRABIT_ARTIFACTORY_TOKEN") != "" {
+					os.Unsetenv("GRABIT_ARTIFACTORY_TOKEN")
 				}
-				os.Setenv(k, v)
-			}
-			defer func() {
-				// Restore environment
-				for k := range tt.setupEnv {
-					if originalVal, exists := origEnv[k]; exists {
-						os.Setenv(k, originalVal)
-					} else {
-						os.Unsetenv(k)
-					}
-				}
-			}()
 
-			var lastErr error
-			for _, cmdArgs := range tt.commands {
+				// Setup environment
+				origEnv := make(map[string]string)
+				for k, v := range cmd.setupEnv {
+					if oldVal, exists := os.LookupEnv(k); exists {
+						origEnv[k] = oldVal
+					}
+					os.Setenv(k, v)
+				}
+
 				// Replace placeholders
-				args := make([]string, len(cmdArgs))
-				for i, arg := range cmdArgs {
+				args := make([]string, len(cmd.args))
+				for i, arg := range cmd.args {
 					switch arg {
 					case "SOURCE_URL":
 						args[i] = contentServer.URL + "/test.txt"
 					case "SOURCE_URL2":
 						args[i] = contentServer.URL + "/test2.txt"
+					case "INVALID_URL":
+						args[i] = "http://invalid-url/file.txt"
 					case "CACHE_URL":
 						args[i] = artifactoryServer.URL + "/grabit-local"
-					case "INVALID_CACHE":
-						args[i] = "http://invalid-cache/repo"
 					case "LOCKFILE":
 						args[i] = lockFile
 					default:
@@ -170,27 +208,28 @@ func TestGrabitRequirements(t *testing.T) {
 				}
 
 				// Execute command
-				cmd := NewRootCmd()
-				cmd.SetArgs(args)
-				err := cmd.Execute()
-				if err != nil {
-					lastErr = err
-				}
-			}
+				c := NewRootCmd()
+				c.SetArgs(args)
+				err := c.Execute()
 
-			// Verify results
-			if tt.expectError {
-				assert.Error(t, lastErr)
-				if tt.errorMsg != "" {
-					assert.Contains(t, lastErr.Error(), tt.errorMsg)
+				// Verify result
+				if cmd.expectError {
+					assert.Error(t, err, "Expected an error but got none")
+					if cmd.errorMsg != "" {
+						assert.Contains(t, err.Error(), cmd.errorMsg)
+					}
+				} else {
+					assert.NoError(t, err)
 				}
-			} else {
-				assert.NoError(t, lastErr)
-			}
 
-			// Run additional verifications if specified
-			if tt.verify != nil {
-				tt.verify(t, tmpDir)
+				// Restore environment
+				for k := range cmd.setupEnv {
+					if originalVal, exists := origEnv[k]; exists {
+						os.Setenv(k, originalVal)
+					} else {
+						os.Unsetenv(k)
+					}
+				}
 			}
 		})
 	}
