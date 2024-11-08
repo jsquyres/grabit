@@ -15,15 +15,16 @@ func addDownload(cmd *cobra.Command) {
 		Args:  cobra.NoArgs,
 		RunE:  runFetch,
 	}
+
 	downloadCmd.Flags().String("dir", ".", "Target directory where to store the files")
 	downloadCmd.Flags().StringArray("tag", []string{}, "Only download the resources with the given tag")
 	downloadCmd.Flags().StringArray("notag", []string{}, "Only download the resources without the given tag")
 	downloadCmd.Flags().String("perm", "", "Optional permissions for the downloaded files (e.g. '644')")
+
 	cmd.AddCommand(downloadCmd)
 }
 
 func runFetch(cmd *cobra.Command, args []string) error {
-	// Retrieve flags
 	lockFile, err := cmd.Flags().GetString("lock-file")
 	if err != nil {
 		return err
@@ -56,7 +57,6 @@ func runFetch(cmd *cobra.Command, args []string) error {
 
 	// Download resources
 	if err := lock.Download(dir, tags, notags, perm); err != nil {
-		// Pass through the original error to maintain error details
 		return err
 	}
 

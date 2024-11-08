@@ -3,10 +3,13 @@
 package internal
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io/ioutil"
+	"net/http"
 	"net/url"
 	"os"
 	"path"
@@ -29,12 +32,11 @@ func NewResourceFromUrl(urls []string, algo string, tags []string, filename stri
 	if len(urls) < 1 {
 		return nil, fmt.Errorf("empty url list")
 	}
-	url := urls[0]
 	ctx := context.Background()
 
-	path, err := GetUrltoTempFile(url, ctx)
+	path, err := GetUrltoTempFile(urls[0], ctx)
 	if err != nil {
-		return nil, err // Pass through the error from getUrl
+		return nil, err
 	}
 	defer os.Remove(path)
 
@@ -60,14 +62,6 @@ func getUrl(u string, fileName string, ctx context.Context) (string, error) {
 		Header("Accept", "*/*").
 		ToFile(fileName)
 
-	// Only add authentication for Artifactory URLs
-	if strings.Contains(u, "artifactory") {
-		token := os.Getenv("ARTIFACTORY_TOKEN")
-		if token != "" {
-			req = req.Header("Authorization", "Bearer "+token)
-		}
-	}
-
 	err := req.Fetch(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to download '%s': %v", u, err)
@@ -88,8 +82,18 @@ func GetUrltoTempFile(u string, ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	fileName := file.Name()
-	return getUrl(u, fileName, ctx)
+	return getUrl(u, file.Name(), ctx)
+}
+
+func GetFileHash(filePath string) (string, error) {
+	data, err := ioutil.ReadFile(filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read file: %w", err)
+	}
+
+	hasher := sha256.New()
+	hasher.Write(data)
+	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
 func (r *Resource) Contains(url string) bool {
@@ -102,33 +106,70 @@ func (r *Resource) Contains(url string) bool {
 }
 
 func (r *Resource) Download(dir string, mode os.FileMode, ctx context.Context) error {
-	// Try cache first if available
 	if r.CacheUri != "" {
-		token := os.Getenv("ARTIFACTORY_TOKEN")
+		token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
 		if token == "" {
-			return fmt.Errorf("ARTIFACTORY_TOKEN required for cache download")
-		}
-
-		log.Debug().Str("CacheUri", r.CacheUri).Msg("Attempting cache download")
-		lpath, err := downloadWithToken(r.CacheUri, dir, ctx, token)
-		if err == nil {
-			if err := checkIntegrityFromFile(lpath, "sha256", r.Integrity, r.CacheUri); err == nil {
-				return renameAndSetPermission(lpath, getLocalFileName(r.CacheUri), mode)
+			log.Debug().Msg("GRABIT_ARTIFACTORY_TOKEN not set, skipping cache")
+		} else {
+			log.Debug().Msg("Attempting cache download")
+			if err := r.downloadFromCache(dir, mode, ctx); err == nil {
+				return nil
+			} else if !strings.Contains(err.Error(), "integrity check failed") {
+				log.Debug().Err(err).Msg("Cache download failed, trying original URL")
 			}
 		}
-		log.Debug().Msg("Cache download failed, trying direct download")
 	}
 
-	// Try each original URL
+	if err := r.downloadFromSource(dir, mode, ctx); err != nil {
+		return err
+	}
+
+	// Upload to cache if configured
+	if r.CacheUri != "" && os.Getenv("NO_CACHE_UPLOAD") == "" {
+		token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
+		if token != "" {
+			if err := r.uploadToCache(dir, ctx); err != nil {
+				log.Debug().Err(err).Msg("Failed to upload to cache")
+			}
+		}
+	}
+
+	return nil
+}
+
+func (r *Resource) downloadFromCache(dir string, mode os.FileMode, ctx context.Context) error {
+	token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
+	if token == "" {
+		return fmt.Errorf("GRABIT_ARTIFACTORY_TOKEN must be set for cache operations")
+	}
+
+	log.Debug().Str("cache", r.CacheUri).Msg("Attempting cache download")
+	tempFile, err := downloadWithToken(r.CacheUri, dir, ctx, token)
+	if err != nil {
+		return err
+	}
+
+	if err := checkIntegrityFromFile(tempFile, "sha256", r.Integrity, r.CacheUri); err != nil {
+		os.Remove(tempFile)
+		log.Debug().Msg("Cache integrity validation failed")
+		return err
+	}
+
+	return renameAndSetPermission(tempFile, filepath.Join(dir, getLocalFileName(r.CacheUri)), mode)
+}
+
+func (r *Resource) downloadFromSource(dir string, mode os.FileMode, ctx context.Context) error {
+	var lastErr error
 	for _, u := range r.Urls {
-		log.Debug().Str("URL", u).Msg("Attempting download")
-		lpath, err := GetUrlToDir(u, dir, ctx)
+		log.Debug().Str("url", u).Msg("Attempting download from source")
+		tempFile, err := GetUrlToDir(u, dir, ctx)
 		if err != nil {
-			log.Debug().Str("URL", u).Msg("Download failed, trying next URL")
+			lastErr = err
+			log.Debug().Err(err).Msg("Download failed, trying next URL")
 			continue
 		}
 
-		if err = checkIntegrityFromFile(lpath, "sha256", r.Integrity, u); err != nil {
+		if err := checkIntegrityFromFile(tempFile, "sha256", r.Integrity, u); err != nil {
 			return err
 		}
 
@@ -137,15 +178,61 @@ func (r *Resource) Download(dir string, mode os.FileMode, ctx context.Context) e
 			localName = path.Base(u)
 		}
 
-		resPath := filepath.Join(dir, localName)
-		if err = renameAndSetPermission(lpath, resPath, mode); err != nil {
-			return err
-		}
-
-		return nil
+		return renameAndSetPermission(tempFile, filepath.Join(dir, localName), mode)
 	}
 
-	return fmt.Errorf("all downloads failed")
+	return fmt.Errorf("failed to download from any source: %v", lastErr)
+}
+
+func (r *Resource) uploadToCache(dir string, ctx context.Context) error {
+	token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
+	if token == "" {
+		return fmt.Errorf("GRABIT_ARTIFACTORY_TOKEN must be set for cache operations")
+	}
+
+	filePath := filepath.Join(dir, getLocalFileName(r.CacheUri))
+	hash, err := GetFileHash(filePath)
+	if err != nil {
+		return err
+	}
+
+	// Clean the base URI and use hash as filename
+	baseUri := strings.TrimSuffix(r.CacheUri, "/")
+	cachePath := fmt.Sprintf("%s/%s", baseUri, hash)
+
+	log.Debug().
+		Str("cachePath", cachePath).
+		Msg("Uploading to cache")
+
+	fileData, err := ioutil.ReadFile(filePath)
+	if err != nil {
+		return err
+	}
+
+	// Use simple http.NewRequest for more control over the request
+	req, err := http.NewRequest(http.MethodPut, cachePath, bytes.NewReader(fileData))
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(fileData)))
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		body, _ := ioutil.ReadAll(resp.Body)
+		return fmt.Errorf("upload failed (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	log.Debug().Str("path", cachePath).Msg("File uploaded to cache")
+	return nil
 }
 
 func downloadWithToken(url, targetDir string, ctx context.Context, token string) (string, error) {
