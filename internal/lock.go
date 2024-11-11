@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strconv"
 
@@ -96,6 +97,16 @@ func (l *Lock) DeleteResource(path string) {
 	for _, r := range l.conf.Resource {
 		if !r.Contains(path) {
 			newResources = append(newResources, r)
+		} else if r.Contains(path) && r.CacheUri != "" {
+			token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
+			if token == "" {
+				fmt.Println("Warning: Unable to delete from Artifcatory: GRABIT_ARTIFACTORY_TOKEN not set.")
+				continue
+			}
+			err := deleteCache(r.CacheUri, token)
+			if err != nil {
+				fmt.Println("Warning: Unable to delete from Artifcatory:", err)
+			}
 		}
 	}
 
@@ -103,6 +114,23 @@ func (l *Lock) DeleteResource(path string) {
 	l.conf.Resource = newResources
 
 	log.Debug().Int("removed", removed).Msg("Resources deleted")
+}
+
+func deleteCache(url, token string) error {
+	req, err := http.NewRequest("DELETE", url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+
+	defer resp.Body.Close()
+
+	return nil
 }
 
 const NoFileMode = os.FileMode(0)
