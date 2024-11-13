@@ -3,7 +3,6 @@
 package cmd
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io/ioutil"
@@ -11,6 +10,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/carlmjohnson/requests"
 	"github.com/cisco-open/grabit/internal"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -112,34 +112,20 @@ func runAdd(cmd *cobra.Command, args []string) error {
 
 // Modified to take token as parameter per Dr. Squyres' feedback
 func uploadToArtifactory(filePath, cacheUrl, token string) error {
-	// Read file content
 	fileData, err := ioutil.ReadFile(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to read file: %w", err)
 	}
 
-	// Create request
-	req, err := http.NewRequest(http.MethodPut, cacheUrl, bytes.NewReader(fileData))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
+	err = requests.URL(cacheUrl).
+		Method(http.MethodPut).
+		Header("Authorization", "Bearer "+token).
+		Header("Content-Type", "application/octet-stream").
+		BodyBytes(fileData).
+		Fetch(context.Background())
 
-	// Set headers with passed token
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/octet-stream")
-
-	// Make request
-	client := &http.Client{}
-	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to upload to Artifactory: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Check response
-	if resp.StatusCode != http.StatusCreated {
-		body, _ := ioutil.ReadAll(resp.Body)
-		return fmt.Errorf("upload failed (status %d): %s", resp.StatusCode, string(body))
 	}
 
 	return nil
