@@ -127,7 +127,7 @@ func (r *Resource) Download(dir string, mode os.FileMode, ctx context.Context) e
 		return err
 	}
 
-	// Try to upload to cache if enabled
+	// Upload to cache if configured
 	if r.CacheUri != "" && os.Getenv("GRABIT_NO_CACHE_UPLOAD") == "" {
 		token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
 		if token != "" {
