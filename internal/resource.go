@@ -3,7 +3,6 @@
 package internal
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -115,6 +114,7 @@ func (r *Resource) Download(dir string, mode os.FileMode, ctx context.Context) e
 			if err == nil {
 				return nil
 			}
+			// Cache failed, log and continue to source
 			log.Debug().Err(err).Msg("Cache download failed, trying source URL")
 		} else {
 			log.Debug().Msg("GRABIT_ARTIFACTORY_TOKEN not set, skipping cache")
@@ -138,15 +138,20 @@ func (r *Resource) Download(dir string, mode os.FileMode, ctx context.Context) e
 }
 
 func (r *Resource) downloadFromCache(dir string, mode os.FileMode, ctx context.Context) error {
+	token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
+	if token == "" {
+		log.Debug().Msg("GRABIT_ARTIFACTORY_TOKEN not set, skipping cache")
+		return fmt.Errorf("cache skipped: token not set")
+	}
+
 	algo, err := getAlgoFromIntegrity(r.Integrity)
 	if err != nil {
 		return err
 	}
 
 	log.Debug().Str("cache", r.CacheUri).Msg("Attempting cache download")
-	tempFile, err := downloadWithToken(r.CacheUri, dir, ctx, os.Getenv("GRABIT_ARTIFACTORY_TOKEN"))
+	tempFile, err := downloadWithToken(r.CacheUri, dir, ctx, token)
 	if err != nil {
-		log.Debug().Err(err).Msg("Cache download failed")
 		return err
 	}
 
@@ -160,6 +165,11 @@ func (r *Resource) downloadFromCache(dir string, mode os.FileMode, ctx context.C
 }
 
 func (r *Resource) downloadFromSource(dir string, mode os.FileMode, ctx context.Context) error {
+	algo, err := getAlgoFromIntegrity(r.Integrity)
+	if err != nil {
+		return err
+	}
+
 	var lastErr error
 	for _, u := range r.Urls {
 		log.Debug().Str("url", u).Msg("Attempting download from source")
@@ -170,10 +180,6 @@ func (r *Resource) downloadFromSource(dir string, mode os.FileMode, ctx context.
 			continue
 		}
 
-		algo, err := getAlgoFromIntegrity(r.Integrity)
-		if err != nil {
-			return err
-		}
 		if err := checkIntegrityFromFile(tempFile, algo, r.Integrity, u); err != nil {
 			return err
 		}
@@ -193,7 +199,7 @@ func (r *Resource) uploadToCache(dir string, ctx context.Context) error {
 	token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
 	if token == "" {
 		log.Debug().Msg("GRABIT_ARTIFACTORY_TOKEN not set, skipping cache upload")
-		return nil // Skip upload instead of returning error
+		return nil
 	}
 
 	filePath := filepath.Join(dir, getLocalFileName(r.CacheUri))
@@ -202,39 +208,25 @@ func (r *Resource) uploadToCache(dir string, ctx context.Context) error {
 		return err
 	}
 
-	// Clean the base URI and use hash as filename
 	baseURL := strings.TrimSuffix(r.CacheUri, "/")
 	cachePath := fmt.Sprintf("%s/%s", baseURL, hash)
 
-	log.Debug().
-		Str("cachePath", cachePath).
-		Msg("Uploading to cache")
+	log.Debug().Str("cachePath", cachePath).Msg("Uploading to cache")
 
 	fileData, err := ioutil.ReadFile(filePath)
 	if err != nil {
 		return err
 	}
 
-	// Use simple http.NewRequest for more control over the request
-	req, err := http.NewRequest(http.MethodPut, cachePath, bytes.NewReader(fileData))
+	err = requests.URL(cachePath).
+		Method(http.MethodPut).
+		Header("Authorization", "Bearer "+token).
+		Header("Content-Type", "application/octet-stream").
+		BodyBytes(fileData).
+		Fetch(ctx)
+
 	if err != nil {
-		return err
-	}
-
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/octet-stream")
-	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(fileData)))
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		body, _ := ioutil.ReadAll(resp.Body)
-		return fmt.Errorf("upload failed (status %d): %s", resp.StatusCode, string(body))
+		return fmt.Errorf("failed to upload to cache: %w", err)
 	}
 
 	log.Debug().Str("path", cachePath).Msg("File uploaded to cache")
