@@ -115,7 +115,6 @@ func (r *Resource) Download(dir string, mode os.FileMode, ctx context.Context) e
 			if err == nil {
 				return nil
 			}
-			// Cache failed, log and continue to source
 			log.Debug().Err(err).Msg("Cache download failed, trying source URL")
 		} else {
 			log.Debug().Msg("GRABIT_ARTIFACTORY_TOKEN not set, skipping cache")
@@ -127,13 +126,11 @@ func (r *Resource) Download(dir string, mode os.FileMode, ctx context.Context) e
 		return err
 	}
 
-	// Upload to cache if configured
+	// Try to upload to cache after successful source download
 	if r.CacheUri != "" && os.Getenv("GRABIT_NO_CACHE_UPLOAD") == "" {
-		token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
-		if token != "" {
-			if err := r.uploadToCache(dir, ctx); err != nil {
-				log.Debug().Err(err).Msg("Failed to upload to cache")
-			}
+		if err := r.uploadToCache(dir, ctx); err != nil {
+			log.Debug().Err(err).Msg("Failed to upload to cache")
+			// Continue despite upload failure
 		}
 	}
 
@@ -141,6 +138,11 @@ func (r *Resource) Download(dir string, mode os.FileMode, ctx context.Context) e
 }
 
 func (r *Resource) downloadFromCache(dir string, mode os.FileMode, ctx context.Context) error {
+	algo, err := getAlgoFromIntegrity(r.Integrity)
+	if err != nil {
+		return err
+	}
+
 	log.Debug().Str("cache", r.CacheUri).Msg("Attempting cache download")
 	tempFile, err := downloadWithToken(r.CacheUri, dir, ctx, os.Getenv("GRABIT_ARTIFACTORY_TOKEN"))
 	if err != nil {
@@ -148,7 +150,7 @@ func (r *Resource) downloadFromCache(dir string, mode os.FileMode, ctx context.C
 		return err
 	}
 
-	if err := checkIntegrityFromFile(tempFile, r.Integrity, r.Integrity, r.CacheUri); err != nil {
+	if err := checkIntegrityFromFile(tempFile, algo, r.Integrity, r.CacheUri); err != nil {
 		os.Remove(tempFile)
 		log.Debug().Msg("Cache integrity validation failed")
 		return err
@@ -168,7 +170,11 @@ func (r *Resource) downloadFromSource(dir string, mode os.FileMode, ctx context.
 			continue
 		}
 
-		if err := checkIntegrityFromFile(tempFile, "sha256", r.Integrity, u); err != nil {
+		algo, err := getAlgoFromIntegrity(r.Integrity)
+		if err != nil {
+			return err
+		}
+		if err := checkIntegrityFromFile(tempFile, algo, r.Integrity, u); err != nil {
 			return err
 		}
 
@@ -186,7 +192,8 @@ func (r *Resource) downloadFromSource(dir string, mode os.FileMode, ctx context.
 func (r *Resource) uploadToCache(dir string, ctx context.Context) error {
 	token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
 	if token == "" {
-		return fmt.Errorf("GRABIT_ARTIFACTORY_TOKEN must be set for cache operations")
+		log.Debug().Msg("GRABIT_ARTIFACTORY_TOKEN not set, skipping cache upload")
+		return nil // Skip upload instead of returning error
 	}
 
 	filePath := filepath.Join(dir, getLocalFileName(r.CacheUri))
@@ -196,8 +203,8 @@ func (r *Resource) uploadToCache(dir string, ctx context.Context) error {
 	}
 
 	// Clean the base URI and use hash as filename
-	baseUri := strings.TrimSuffix(r.CacheUri, "/")
-	cachePath := fmt.Sprintf("%s/%s", baseUri, hash)
+	baseURL := strings.TrimSuffix(r.CacheUri, "/")
+	cachePath := fmt.Sprintf("%s/%s", baseURL, hash)
 
 	log.Debug().
 		Str("cachePath", cachePath).
