@@ -129,7 +129,7 @@ func (r *Resource) Download(dir string, mode os.FileMode, ctx context.Context) e
 	// Try to upload to cache after successful source download
 	if r.CacheUri != "" && os.Getenv("GRABIT_NO_CACHE_UPLOAD") == "" {
 		if err := r.uploadToCache(dir, ctx); err != nil {
-			log.Debug().Err(err).Msg("Failed to upload to cache")
+			log.Warn().Err(err).Msg("Failed to upload to cache")
 			// Continue despite upload failure
 		}
 	}
@@ -205,7 +205,7 @@ func (r *Resource) uploadToCache(dir string, ctx context.Context) error {
 	filePath := filepath.Join(dir, getLocalFileName(r.CacheUri))
 	hash, err := GetFileHash(filePath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to upload to cache: %w", err)
 	}
 
 	baseURL := strings.TrimSuffix(r.CacheUri, "/")
