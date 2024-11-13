@@ -106,26 +106,29 @@ func (r *Resource) Contains(url string) bool {
 }
 
 func (r *Resource) Download(dir string, mode os.FileMode, ctx context.Context) error {
+	// Try cache first if available
 	if r.CacheUri != "" {
 		token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
-		if token == "" {
-			log.Debug().Msg("GRABIT_ARTIFACTORY_TOKEN not set, skipping cache")
-		} else {
+		if token != "" {
 			log.Debug().Msg("Attempting cache download")
-			if err := r.downloadFromCache(dir, mode, ctx); err == nil {
+			err := r.downloadFromCache(dir, mode, ctx)
+			if err == nil {
 				return nil
-			} else if !strings.Contains(err.Error(), "integrity check failed") {
-				log.Debug().Err(err).Msg("Cache download failed, trying original URL")
 			}
+			// Cache failed, log and continue to source
+			log.Debug().Err(err).Msg("Cache download failed, trying source URL")
+		} else {
+			log.Debug().Msg("GRABIT_ARTIFACTORY_TOKEN not set, skipping cache")
 		}
 	}
 
+	// Download from source
 	if err := r.downloadFromSource(dir, mode, ctx); err != nil {
 		return err
 	}
 
-	// Upload to cache if configured
-	if r.CacheUri != "" && os.Getenv("NO_CACHE_UPLOAD") == "" {
+	// Try to upload to cache if enabled
+	if r.CacheUri != "" && os.Getenv("GRABIT_NO_CACHE_UPLOAD") == "" {
 		token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
 		if token != "" {
 			if err := r.uploadToCache(dir, ctx); err != nil {
@@ -138,18 +141,14 @@ func (r *Resource) Download(dir string, mode os.FileMode, ctx context.Context) e
 }
 
 func (r *Resource) downloadFromCache(dir string, mode os.FileMode, ctx context.Context) error {
-	token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
-	if token == "" {
-		return fmt.Errorf("GRABIT_ARTIFACTORY_TOKEN must be set for cache operations")
-	}
-
 	log.Debug().Str("cache", r.CacheUri).Msg("Attempting cache download")
-	tempFile, err := downloadWithToken(r.CacheUri, dir, ctx, token)
+	tempFile, err := downloadWithToken(r.CacheUri, dir, ctx, os.Getenv("GRABIT_ARTIFACTORY_TOKEN"))
 	if err != nil {
+		log.Debug().Err(err).Msg("Cache download failed")
 		return err
 	}
 
-	if err := checkIntegrityFromFile(tempFile, "sha256", r.Integrity, r.CacheUri); err != nil {
+	if err := checkIntegrityFromFile(tempFile, r.Integrity, r.Integrity, r.CacheUri); err != nil {
 		os.Remove(tempFile)
 		log.Debug().Msg("Cache integrity validation failed")
 		return err
