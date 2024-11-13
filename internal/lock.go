@@ -26,25 +26,22 @@ type config struct {
 }
 
 func NewLock(path string, newOk bool) (*Lock, error) {
-	_, err := os.Stat(path)
-	if os.IsNotExist(err) {
+	_, error := os.Stat(path)
+	if os.IsNotExist(error) {
 		if newOk {
-			return &Lock{
-				path: path,
-				conf: config{Resource: []Resource{}},
-			}, nil
+			return &Lock{path: path}, nil
+		} else {
+			return nil, fmt.Errorf("file '%s' does not exist", path)
 		}
-		return nil, fmt.Errorf("lock file '%s' does not exist", path)
 	}
-
 	var conf config
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, error
 	}
-	defer file.Close()
-
-	if err := toml.NewDecoder(file).Decode(&conf); err != nil {
+	d := toml.NewDecoder(file)
+	err = d.Decode(&conf)
+	if err != nil {
 		return nil, err
 	}
 
