@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/cisco-open/grabit/internal"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
@@ -40,9 +41,9 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	}
 
 	// Check GRABIT_ARTIFACTORY_TOKEN if cache specified
-	var token string
+	var token string // Declare token once
 	if cache != "" {
-		token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
+		token = os.Getenv("GRABIT_ARTIFACTORY_TOKEN") // Use = instead of :=
 		if token == "" {
 			return fmt.Errorf("GRABIT_ARTIFACTORY_TOKEN must be set when using cache")
 		}
@@ -65,11 +66,15 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	// Handle cache if specified
 	var cachePath string
 	if cache != "" {
-		// Construct cache path using hash
-		cachePath = fmt.Sprintf("%s/%s", strings.TrimSuffix(cache, "/"), hash)
+
+		// Ensure cache URL ends with a single /
+		cache = strings.TrimSuffix(cache, "/") + "/"
+		cachePath = cache + hash
+
 		if err := uploadToArtifactory(tempFile, cachePath, token); err != nil {
 			return fmt.Errorf("failed to upload to Artifactory: %w", err)
 		}
+		log.Debug().Str("path", cachePath).Msg("Successfully uploaded to cache")
 	}
 
 	// Add to lock file
@@ -107,19 +112,23 @@ func runAdd(cmd *cobra.Command, args []string) error {
 
 // Modified to take token as parameter per Dr. Squyres' feedback
 func uploadToArtifactory(filePath, cacheUrl, token string) error {
+	// Read file content
 	fileData, err := ioutil.ReadFile(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to read file: %w", err)
 	}
 
+	// Create request
 	req, err := http.NewRequest(http.MethodPut, cacheUrl, bytes.NewReader(fileData))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
+	// Set headers with passed token
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/octet-stream")
 
+	// Make request
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -127,6 +136,7 @@ func uploadToArtifactory(filePath, cacheUrl, token string) error {
 	}
 	defer resp.Body.Close()
 
+	// Check response
 	if resp.StatusCode != http.StatusCreated {
 		body, _ := ioutil.ReadAll(resp.Body)
 		return fmt.Errorf("upload failed (status %d): %s", resp.StatusCode, string(body))
