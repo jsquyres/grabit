@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strconv"
 
@@ -26,22 +27,25 @@ type config struct {
 }
 
 func NewLock(path string, newOk bool) (*Lock, error) {
-	_, error := os.Stat(path)
-	if os.IsNotExist(error) {
+	_, err := os.Stat(path)
+	if os.IsNotExist(err) {
 		if newOk {
-			return &Lock{path: path}, nil
-		} else {
-			return nil, fmt.Errorf("file '%s' does not exist", path)
+			return &Lock{
+				path: path,
+				conf: config{Resource: []Resource{}},
+			}, nil
 		}
+		return nil, fmt.Errorf("lock file '%s' does not exist", path)
 	}
+
 	var conf config
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, error
+		return nil, err
 	}
-	d := toml.NewDecoder(file)
-	err = d.Decode(&conf)
-	if err != nil {
+	defer file.Close()
+
+	if err := toml.NewDecoder(file).Decode(&conf); err != nil {
 		return nil, err
 	}
 
@@ -93,6 +97,19 @@ func (l *Lock) DeleteResource(path string) {
 	for _, r := range l.conf.Resource {
 		if !r.Contains(path) {
 			newResources = append(newResources, r)
+ feature/artifactory-delete
+		} else if r.Contains(path) && r.CacheUri != "" {
+			token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
+			if token == "" {
+				fmt.Println("Warning: Unable to delete from Artifcatory: GRABIT_ARTIFACTORY_TOKEN not set.")
+				continue
+			}
+			err := deleteCache(r.CacheUri, token)
+			if err != nil {
+				fmt.Println("Warning: Unable to delete from Artifcatory:", err)
+			}
+
+feature/artifactory-upload
 		}
 	}
 
@@ -100,6 +117,26 @@ func (l *Lock) DeleteResource(path string) {
 	l.conf.Resource = newResources
 
 	log.Debug().Int("removed", removed).Msg("Resources deleted")
+ feature/artifactory-delete
+}
+
+func deleteCache(url, token string) error {
+	req, err := http.NewRequest("DELETE", url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+
+	defer resp.Body.Close()
+
+	return nil
+
+ feature/artifactory-upload
 }
 
 const NoFileMode = os.FileMode(0)
