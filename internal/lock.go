@@ -97,6 +97,7 @@ func (l *Lock) DeleteResource(path string) {
 	for _, r := range l.conf.Resource {
 		if !r.Contains(path) {
 			newResources = append(newResources, r)
+ feature/artifactory-delete
 		} else if r.Contains(path) && r.CacheUri != "" {
 			token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
 			if token == "" {
@@ -107,6 +108,8 @@ func (l *Lock) DeleteResource(path string) {
 			if err != nil {
 				fmt.Println("Warning: Unable to delete from Artifcatory:", err)
 			}
+
+feature/artifactory-upload
 		}
 	}
 
@@ -114,6 +117,7 @@ func (l *Lock) DeleteResource(path string) {
 	l.conf.Resource = newResources
 
 	log.Debug().Int("removed", removed).Msg("Resources deleted")
+ feature/artifactory-delete
 }
 
 func deleteCache(url, token string) error {
@@ -131,6 +135,8 @@ func deleteCache(url, token string) error {
 	defer resp.Body.Close()
 
 	return nil
+
+ feature/artifactory-upload
 }
 
 const NoFileMode = os.FileMode(0)

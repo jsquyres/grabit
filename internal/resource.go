@@ -106,6 +106,7 @@ func (r *Resource) Contains(url string) bool {
 }
 
 func (r *Resource) Download(dir string, mode os.FileMode, ctx context.Context) error {
+ feature/artifactory-delete
 	if r.CacheUri != "" {
 		token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
 		if token == "" {
@@ -120,10 +121,30 @@ func (r *Resource) Download(dir string, mode os.FileMode, ctx context.Context) e
 		}
 	}
 
+
+	// Try cache first if available
+	if r.CacheUri != "" {
+		token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
+		if token != "" {
+			log.Debug().Msg("Attempting cache download")
+			err := r.downloadFromCache(dir, mode, ctx)
+			if err == nil {
+				return nil
+			}
+			// Cache failed, log and continue to source
+			log.Debug().Err(err).Msg("Cache download failed, trying source URL")
+		} else {
+			log.Debug().Msg("GRABIT_ARTIFACTORY_TOKEN not set, skipping cache")
+		}
+	}
+
+	// Download from source
+ feature/artifactory-upload
 	if err := r.downloadFromSource(dir, mode, ctx); err != nil {
 		return err
 	}
 
+ feature/artifactory-delete
 	// Upload to cache if configured
 	if r.CacheUri != "" && os.Getenv("NO_CACHE_UPLOAD") == "" {
 		token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
@@ -131,6 +152,13 @@ func (r *Resource) Download(dir string, mode os.FileMode, ctx context.Context) e
 			if err := r.uploadToCache(dir, ctx); err != nil {
 				log.Debug().Err(err).Msg("Failed to upload to cache")
 			}
+
+	// Try to upload to cache after successful source download
+	if r.CacheUri != "" && os.Getenv("GRABIT_NO_CACHE_UPLOAD") == "" {
+		if err := r.uploadToCache(dir, ctx); err != nil {
+			log.Warn().Err(err).Msg("Failed to upload to cache")
+			// Continue despite upload failure
+ feature/artifactory-upload
 		}
 	}
 
@@ -140,7 +168,17 @@ func (r *Resource) Download(dir string, mode os.FileMode, ctx context.Context) e
 func (r *Resource) downloadFromCache(dir string, mode os.FileMode, ctx context.Context) error {
 	token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
 	if token == "" {
+ feature/artifactory-delete
 		return fmt.Errorf("GRABIT_ARTIFACTORY_TOKEN must be set for cache operations")
+
+		log.Debug().Msg("GRABIT_ARTIFACTORY_TOKEN not set, skipping cache")
+		return fmt.Errorf("cache skipped: token not set")
+	}
+
+	algo, err := getAlgoFromIntegrity(r.Integrity)
+	if err != nil {
+		return err
+ feature/artifactory-upload
 	}
 
 	log.Debug().Str("cache", r.CacheUri).Msg("Attempting cache download")
@@ -149,7 +187,11 @@ func (r *Resource) downloadFromCache(dir string, mode os.FileMode, ctx context.C
 		return err
 	}
 
+ feature/artifactory-delete
 	if err := checkIntegrityFromFile(tempFile, "sha256", r.Integrity, r.CacheUri); err != nil {
+
+	if err := checkIntegrityFromFile(tempFile, algo, r.Integrity, r.CacheUri); err != nil {
+ feature/artifactory-upload
 		os.Remove(tempFile)
 		log.Debug().Msg("Cache integrity validation failed")
 		return err
@@ -159,6 +201,14 @@ func (r *Resource) downloadFromCache(dir string, mode os.FileMode, ctx context.C
 }
 
 func (r *Resource) downloadFromSource(dir string, mode os.FileMode, ctx context.Context) error {
+ feature/artifactory-delete
+
+	algo, err := getAlgoFromIntegrity(r.Integrity)
+	if err != nil {
+		return err
+	}
+
+ feature/artifactory-upload
 	var lastErr error
 	for _, u := range r.Urls {
 		log.Debug().Str("url", u).Msg("Attempting download from source")
@@ -169,7 +219,11 @@ func (r *Resource) downloadFromSource(dir string, mode os.FileMode, ctx context.
 			continue
 		}
 
+ feature/artifactory-delete
 		if err := checkIntegrityFromFile(tempFile, "sha256", r.Integrity, u); err != nil {
+
+		if err := checkIntegrityFromFile(tempFile, algo, r.Integrity, u); err != nil {
+ feature/artifactory-upload
 			return err
 		}
 
@@ -187,12 +241,18 @@ func (r *Resource) downloadFromSource(dir string, mode os.FileMode, ctx context.
 func (r *Resource) uploadToCache(dir string, ctx context.Context) error {
 	token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
 	if token == "" {
+ feature/artifactory-delete
 		return fmt.Errorf("GRABIT_ARTIFACTORY_TOKEN must be set for cache operations")
+
+		log.Debug().Msg("GRABIT_ARTIFACTORY_TOKEN not set, skipping cache upload")
+		return nil
+ feature/artifactory-upload
 	}
 
 	filePath := filepath.Join(dir, getLocalFileName(r.CacheUri))
 	hash, err := GetFileHash(filePath)
 	if err != nil {
+ feature/artifactory-delete
 		return err
 	}
 
@@ -229,6 +289,30 @@ func (r *Resource) uploadToCache(dir string, ctx context.Context) error {
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
 		body, _ := ioutil.ReadAll(resp.Body)
 		return fmt.Errorf("upload failed (status %d): %s", resp.StatusCode, string(body))
+
+		return fmt.Errorf("failed to upload to cache: %w", err)
+	}
+
+	baseURL := strings.TrimSuffix(r.CacheUri, "/")
+	cachePath := fmt.Sprintf("%s/%s", baseURL, hash)
+
+	log.Debug().Str("cachePath", cachePath).Msg("Uploading to cache")
+
+	fileData, err := ioutil.ReadFile(filePath)
+	if err != nil {
+		return err
+	}
+
+	err = requests.URL(cachePath).
+		Method(http.MethodPut).
+		Header("Authorization", "Bearer "+token).
+		Header("Content-Type", "application/octet-stream").
+		BodyBytes(fileData).
+		Fetch(ctx)
+
+	if err != nil {
+		return fmt.Errorf("failed to upload to cache: %w", err)
+ feature/artifactory-upload
 	}
 
 	log.Debug().Str("path", cachePath).Msg("File uploaded to cache")
