@@ -1,22 +1,29 @@
 // Copyright (c) 2023 Cisco Systems, Inc. and its affiliates
 // All rights reserved.
+
 package internal
 
 import (
+	"bufio"
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"path"
+	"path/filepath"
 	"strconv"
+	"strings"
 
-	"github.com/pelletier/go-toml/v2"
-	"github.com/rs/zerolog/log"
+	toml "github.com/pelletier/go-toml/v2"
 )
 
-// Keeping COMMENT_PREFIX as requested in review
-const COMMENT_PREFIX = "//"
+var COMMENT_PREFIX = "//"
 
+// Lock represents a grabit lockfile.
 type Lock struct {
 	path string
 	conf config
@@ -27,258 +34,270 @@ type config struct {
 }
 
 func NewLock(path string, newOk bool) (*Lock, error) {
-	_, err := os.Stat(path)
-	if os.IsNotExist(err) {
+	_, error := os.Stat(path)
+	if os.IsNotExist(error) {
 		if newOk {
-			return &Lock{
-				path: path,
-				conf: config{Resource: []Resource{}},
-			}, nil
+			return &Lock{path: path}, nil
+		} else {
+			return nil, fmt.Errorf("file '%s' does not exist", path)
 		}
-		return nil, fmt.Errorf("lock file '%s' does not exist", path)
 	}
-
 	var conf config
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, error
 	}
-	defer file.Close()
-
-	if err := toml.NewDecoder(file).Decode(&conf); err != nil {
+	d := toml.NewDecoder(file)
+	err = d.Decode(&conf)
+	if err != nil {
 		return nil, err
 	}
 
 	return &Lock{path: path, conf: conf}, nil
 }
 
-func (l *Lock) AddResource(paths []string, algo string, tags []string, filename string) error {
-	return l.AddResourceWithCache(paths, algo, tags, filename, "")
-}
-
-func (l *Lock) AddResourceWithCache(paths []string, algo string, tags []string, filename string, cacheUri string) error {
-	// Check for duplicate resources
+func (l *Lock) AddResource(paths []string, algo string, tags []string, filename string, cacheURL string) error {
 	for _, u := range paths {
 		if l.Contains(u) {
 			return fmt.Errorf("resource '%s' is already present", u)
 		}
 	}
-
-	log.Debug().
-		Strs("paths", paths).
-		Str("algo", algo).
-		Strs("tags", tags).
-		Str("filename", filename).
-		Str("cache_uri", cacheUri).
-		Msg("Adding new resource")
-
-	r, err := NewResourceFromUrlWithCache(paths, algo, tags, filename, cacheUri)
+	r, err := NewResourceFromUrl(paths, algo, tags, filename, cacheURL)
 	if err != nil {
 		return err
 	}
-
 	l.conf.Resource = append(l.conf.Resource, *r)
 	return nil
 }
 
-func NewResourceFromUrlWithCache(paths []string, algo string, tags []string, filename string, cacheUri string) (*Resource, error) {
-	r, err := NewResourceFromUrl(paths, algo, tags, filename)
-	if err != nil {
-		return nil, err
-	}
-	r.CacheUri = cacheUri
-	return r, nil
-}
-
 func (l *Lock) DeleteResource(path string) {
-	log.Debug().Str("path", path).Msg("Deleting resource")
-
-	newResources := []Resource{}
+	newStatements := []Resource{}
 	for _, r := range l.conf.Resource {
 		if !r.Contains(path) {
-			newResources = append(newResources, r)
- feature/artifactory-delete
-		} else if r.Contains(path) && r.CacheUri != "" {
-			token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
-			if token == "" {
-				fmt.Println("Warning: Unable to delete from Artifcatory: GRABIT_ARTIFACTORY_TOKEN not set.")
-				continue
-			}
-			err := deleteCache(r.CacheUri, token)
-			if err != nil {
-				fmt.Println("Warning: Unable to delete from Artifcatory:", err)
-			}
-
-feature/artifactory-upload
+			newStatements = append(newStatements, r)
 		}
 	}
-
-	removed := len(l.conf.Resource) - len(newResources)
-	l.conf.Resource = newResources
-
-	log.Debug().Int("removed", removed).Msg("Resources deleted")
- feature/artifactory-delete
-}
-
-func deleteCache(url, token string) error {
-	req, err := http.NewRequest("DELETE", url, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-
-	defer resp.Body.Close()
-
-	return nil
-
- feature/artifactory-upload
+	l.conf.Resource = newStatements
 }
 
 const NoFileMode = os.FileMode(0)
 
+// strToFileMode converts a string to a os.FileMode.
 func strToFileMode(perm string) (os.FileMode, error) {
 	if perm == "" {
 		return NoFileMode, nil
 	}
 	parsed, err := strconv.ParseUint(perm, 8, 32)
 	if err != nil {
-		return NoFileMode, fmt.Errorf("invalid permission format: %w", err)
+		return NoFileMode, err
 	}
 	return os.FileMode(parsed), nil
 }
 
+// Download gets all the resources in this lock file and moves them to
+// the destination directory.
 func (l *Lock) Download(dir string, tags []string, notags []string, perm string) error {
 	if stat, err := os.Stat(dir); err != nil || !stat.IsDir() {
 		return fmt.Errorf("'%s' is not a directory", dir)
 	}
-
 	mode, err := strToFileMode(perm)
 	if err != nil {
-		return err
-	}
-
-	resources := l.filterResources(tags, notags)
-	if len(resources) == 0 {
-		return fmt.Errorf("no resources to download")
+		return fmt.Errorf("'%s' is not a valid permission definition", perm)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
-	return l.downloadResources(resources, dir, mode, ctx)
-}
-
-func (l *Lock) filterResources(tags, notags []string) []Resource {
-	if len(tags) == 0 && len(notags) == 0 {
-		return l.conf.Resource
-	}
-
-	var filtered []Resource
-	for _, r := range l.conf.Resource {
-		if hasAllTags(r.Tags, tags) && !hasAnyTag(r.Tags, notags) {
-			filtered = append(filtered, r)
-		}
-	}
-	return filtered
-}
-
-func hasAllTags(resourceTags, requiredTags []string) bool {
-	if len(requiredTags) == 0 {
-		return true
-	}
-
-	for _, required := range requiredTags {
-		found := false
-		for _, tag := range resourceTags {
-			if required == tag {
-				found = true
-				break
+	// Filter in the resources that have all the required tags.
+	tagFilteredResources := []Resource{}
+	if len(tags) > 0 {
+		for _, r := range l.conf.Resource {
+			hasAllTags := true
+			for _, tag := range tags {
+				hasTag := false
+				for _, rtag := range r.Tags {
+					if tag == rtag {
+						hasTag = true
+						break
+					}
+				}
+				if !hasTag {
+					hasAllTags = false
+					break
+				}
+			}
+			if hasAllTags {
+				tagFilteredResources = append(tagFilteredResources, r)
 			}
 		}
-		if !found {
-			return false
-		}
+	} else {
+		tagFilteredResources = l.conf.Resource
 	}
-	return true
-}
-
-func hasAnyTag(resourceTags, excludedTags []string) bool {
-	for _, excluded := range excludedTags {
-		for _, tag := range resourceTags {
-			if excluded == tag {
-				return true
+	// Filter out the resources that have any 'notag' tag.
+	filteredResources := []Resource{}
+	if len(notags) > 0 {
+		for _, r := range tagFilteredResources {
+			hasTag := false
+			for _, notag := range notags {
+				for _, rtag := range r.Tags {
+					if notag == rtag {
+						hasTag = true
+					}
+				}
+			}
+			if !hasTag {
+				filteredResources = append(filteredResources, r)
 			}
 		}
+	} else {
+		filteredResources = tagFilteredResources
 	}
-	return false
-}
 
-func (l *Lock) downloadResources(resources []Resource, dir string, mode os.FileMode, ctx context.Context) error {
-	total := len(resources)
+	total := len(filteredResources)
+	if total == 0 {
+		return fmt.Errorf("nothing to download")
+	}
 	errorCh := make(chan error, total)
-
-	for _, r := range resources {
+	for _, r := range filteredResources {
 		resource := r
 		go func() {
-			errorCh <- resource.Download(dir, mode, ctx)
+			// See if the resource has an Artifactory URL
+			if resource.CacheUri != "" {
+				// Find the correct filename
+				filename := resource.Filename
+				if filename == "" {
+					filename = path.Base(resource.Urls[0])
+				}
+				// Build the full file path
+				fullPath := filepath.Join(dir, filename)
+
+				err := downloadFromArtifactory(ctx, resource.CacheUri, resource.Integrity, fullPath, mode)
+				if err == nil {
+					errorCh <- nil
+					return
+				}
+				// Show a warning only for connection errors
+				if strings.Contains(err.Error(), "lookup invalid") || strings.Contains(err.Error(), "dial tcp") {
+					fmt.Printf("Failed to download from Artifactory, falling back to original URL: %v\n", err)
+				}
+			}
+
+			err := resource.Download(dir, mode, ctx)
+			errorCh <- err
 		}()
 	}
-
-	var errs []error
-	success := 0
-
-	for i := 0; i < total; i++ {
-		if err := <-errorCh; err != nil {
+	done := 0
+	errs := []error{}
+	for range total {
+		err = <-errorCh
+		if err != nil {
 			errs = append(errs, err)
 		} else {
-			success++
+			done += 1
 		}
 	}
-
-	log.Debug().
-		Int("total", total).
-		Int("success", success).
-		Int("failed", len(errs)).
-		Msg("Download operation completed")
-
+	if done == total {
+		return nil
+	}
 	if len(errs) > 0 {
 		return errors.Join(errs...)
 	}
-
 	return nil
 }
 
-func (l *Lock) Save() error {
-	log.Debug().Str("path", l.path).Msg("Saving lock file")
+func downloadFromArtifactory(ctx context.Context, cacheURL string, integrity string, filePath string, mode os.FileMode) error {
+	token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
+	if token == "" {
+		return fmt.Errorf("GRABIT_ARTIFACTORY_TOKEN environment variable is not set")
+	}
 
-	data, err := toml.Marshal(l.conf)
+	// Extract hash from integrity string
+	h := strings.TrimPrefix(integrity, "sha256-")
+	h = strings.TrimRight(h, "=")
+	padding := len(h) % 4
+	if padding != 0 {
+		h += strings.Repeat("=", 4-padding)
+	}
+
+	hashBytes, err := base64.StdEncoding.DecodeString(h)
+	if err != nil {
+		return fmt.Errorf("failed to decode hash: %v", err)
+	}
+
+	hexHash := hex.EncodeToString(hashBytes)
+	artifactoryURL := fmt.Sprintf("%s/%s", cacheURL, hexHash)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", artifactoryURL, nil)
 	if err != nil {
 		return err
 	}
 
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("failed to download from Artifactory, status code: %d", resp.StatusCode)
+	}
+
+	// If mode is not set, use a default
+	if mode == 0 {
+		mode = 0644
+	}
+
+	// Create a temporary file first
+	tmpFile, err := os.CreateTemp(filepath.Dir(filePath), "download-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
+		return err
+	}
+	tmpFile.Close()
+
+	// Set permissions on temporary file
+	if err := os.Chmod(tmpPath, mode); err != nil {
+		return err
+	}
+
+	// Move to final location
+	return os.Rename(tmpPath, filePath)
+}
+
+// Save this lock file to disk.
+func (l *Lock) Save() error {
+	res, err := toml.Marshal(l.conf)
+	if err != nil {
+		return err
+	}
 	file, err := os.Create(l.path)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
-
-	if _, err := file.Write(data); err != nil {
+	w := bufio.NewWriter(file)
+	_, err = w.Write(res)
+	if err != nil {
 		return err
 	}
-
-	log.Debug().Msg("Lock file saved")
+	w.Flush()
 	return nil
 }
 
+// Contains returns true if this lock file contains the
+// given resource url.
 func (l *Lock) Contains(url string) bool {
 	for _, r := range l.conf.Resource {
-		if r.Contains(url) {
-			return true
+		for _, u := range r.Urls {
+			if url == u {
+				return true
+			}
 		}
 	}
 	return false
