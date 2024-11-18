@@ -112,9 +112,9 @@ func TestRunDownloadFailsIntegrityTest(t *testing.T) {
 	content := `abcdef`
 	port := test.TestHttpHandler(content, t)
 	testfilepath := test.TmpFile(t, fmt.Sprintf(`
-	[[Resource]]
-	Urls = ['http://localhost:%d/test.html']
-	Integrity = 'sha256-bogus'
+    [[Resource]]
+    Urls = ['http://localhost:%d/test.html']
+    Integrity = 'sha256-bogus'
 `, port))
 	outputDir := test.TmpDir(t)
 	cmd := NewRootCmd()
@@ -129,9 +129,9 @@ func TestRunDownloadTriesAllUrls(t *testing.T) {
 	contentIntegrity := getSha256Integrity(content)
 	port := test.TestHttpHandler(content, t)
 	testfilepath := test.TmpFile(t, fmt.Sprintf(`
-	[[Resource]]
-	Urls = ['http://cannot-be-resolved.no:12/test.html', 'http://localhost:%d/test.html']
-	Integrity = '%s'
+    [[Resource]]
+    Urls = ['http://cannot-be-resolved.no:12/test.html', 'http://localhost:%d/test.html']
+    Integrity = '%s'
 `, port, contentIntegrity))
 	outputDir := test.TmpDir(t)
 	cmd := NewRootCmd()
