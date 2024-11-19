@@ -51,11 +51,7 @@ func TestLockManipulations(t *testing.T) {
 	port, server := test.HttpHandler(handler)
 	defer server.Close()
 	resource := fmt.Sprintf("http://localhost:%d/test2.html", port)
-<<<<<<< HEAD
-	err = lock.AddResource([]string{resource}, "sha512", []string{}, "")
-=======
 	err = lock.AddResource([]string{resource}, "sha512", []string{}, "", "cacheUri")
->>>>>>> 1dc3140 (Replace old project files with new ones)
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(lock.conf.Resource))
 	err = lock.Save()
