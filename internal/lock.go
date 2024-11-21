@@ -5,6 +5,7 @@ package internal
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/hex"
@@ -66,7 +67,79 @@ func (l *Lock) AddResource(paths []string, algo string, tags []string, filename 
 	if err != nil {
 		return err
 	}
+
+	// If cache URL is provided, handles Artifactory upload
+	if cacheURL != "" {
+		token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
+		if token == "" {
+			return fmt.Errorf("GRABIT_ARTIFACTORY_TOKEN environment variable is not set")
+		}
+	}
+	// Get file again for upload
+	path, err := GetUrltoTempFile(paths[0], context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to get file for cache: %s", err)
+	}
+	defer os.Remove(path)
+
+	// Upload to Artifactory using hash as filename
+	err = uploadToArtifactory(path, cacheURL, r.Integrity)
+	if err != nil {
+		return fmt.Errorf("failed to upload to cache: %v", err)
+	}
+
 	l.conf.Resource = append(l.conf.Resource, *r)
+	return nil
+}
+
+func uploadToArtifactory(filePath, cacheURL, integrity string) error {
+	token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
+	if token == "" {
+		return fmt.Errorf("GRABIT_ARTIFACTORY_TOKEN environment variable is not set")
+	}
+
+	// Read file
+	fileContent, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to read file: %v", err)
+	}
+
+	// Get hash from integrity string
+	h := strings.TrimPrefix(integrity, "sha256-")
+	h = strings.TrimRight(h, "=")
+	padding := len(h) % 4
+	if padding != 0 {
+		h += strings.Repeat("=", 4-padding)
+	}
+
+	hashBytes, err := base64.StdEncoding.DecodeString(h)
+	if err != nil {
+		return fmt.Errorf("failed to decode hash: %v", err)
+	}
+
+	hexHash := hex.EncodeToString(hashBytes)
+	artifactoryURL := fmt.Sprintf("%s/%s", cacheURL, hexHash)
+
+	// Create upload request
+	req, err := http.NewRequest("PUT", artifactoryURL, bytes.NewReader(fileContent))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %v", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/octet-stream")
+
+	// Do upload
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to upload: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("upload failed with status: %d", resp.StatusCode)
+	}
+
 	return nil
 }
 
