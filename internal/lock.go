@@ -7,11 +7,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path"
@@ -104,21 +103,7 @@ func uploadToArtifactory(filePath, cacheURL, integrity string) error {
 		return fmt.Errorf("failed to read file: %v", err)
 	}
 
-	// Get hash from integrity string
-	h := strings.TrimPrefix(integrity, "sha256-")
-	h = strings.TrimRight(h, "=")
-	padding := len(h) % 4
-	if padding != 0 {
-		h += strings.Repeat("=", 4-padding)
-	}
-
-	hashBytes, err := base64.StdEncoding.DecodeString(h)
-	if err != nil {
-		return fmt.Errorf("failed to decode hash: %v", err)
-	}
-
-	hexHash := hex.EncodeToString(hashBytes)
-	artifactoryURL := fmt.Sprintf("%s/%s", cacheURL, hexHash)
+	artifactoryURL := fmt.Sprintf("%s/%s", cacheURL, integrity)
 
 	// Create upload request
 	req, err := http.NewRequest("PUT", artifactoryURL, bytes.NewReader(fileContent))
@@ -148,9 +133,40 @@ func (l *Lock) DeleteResource(path string) {
 	for _, r := range l.conf.Resource {
 		if !r.Contains(path) {
 			newStatements = append(newStatements, r)
+		} else if r.Contains(path) && r.CacheUri != "" {
+			token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
+			if token == "" {
+				slog.Warn("Warning: Unable to delete from Artifcatory: GRABIT_ARTIFACTORY_TOKEN not set.")
+				continue
+			}
+
+			artifactoryURL := fmt.Sprintf("%s/%s", r.CacheUri, r.Integrity)
+
+			err := deleteCache(artifactoryURL, token)
+			if err != nil {
+				slog.Warn("Warning: Unable to delete from Artifcatory")
+			}
 		}
 	}
 	l.conf.Resource = newStatements
+}
+
+func deleteCache(url, token string) error {
+	req, err := http.NewRequest("DELETE", url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	client := &http.Client{}
+	resp, err := client.Do(req)
+
+	defer resp.Body.Close()
+
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 const NoFileMode = os.FileMode(0)
@@ -283,21 +299,7 @@ func downloadFromArtifactory(ctx context.Context, cacheURL string, integrity str
 		return fmt.Errorf("GRABIT_ARTIFACTORY_TOKEN environment variable is not set")
 	}
 
-	// Extract hash from integrity string
-	h := strings.TrimPrefix(integrity, "sha256-")
-	h = strings.TrimRight(h, "=")
-	padding := len(h) % 4
-	if padding != 0 {
-		h += strings.Repeat("=", 4-padding)
-	}
-
-	hashBytes, err := base64.StdEncoding.DecodeString(h)
-	if err != nil {
-		return fmt.Errorf("failed to decode hash: %v", err)
-	}
-
-	hexHash := hex.EncodeToString(hashBytes)
-	artifactoryURL := fmt.Sprintf("%s/%s", cacheURL, hexHash)
+	artifactoryURL := fmt.Sprintf("%s/%s", cacheURL, integrity)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", artifactoryURL, nil)
 	if err != nil {
