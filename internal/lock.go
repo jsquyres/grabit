@@ -73,19 +73,18 @@ func (l *Lock) AddResource(paths []string, algo string, tags []string, filename 
 		if token == "" {
 			return fmt.Errorf("GRABIT_ARTIFACTORY_TOKEN environment variable is not set")
 		}
+	}
+	// Get file again for upload
+	path, err := GetUrltoTempFile(paths[0], context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to get file for cache: %s", err)
+	}
+	defer os.Remove(path)
 
-		// Get file again for upload
-		path, err := GetUrltoTempFile(paths[0], context.Background())
-		if err != nil {
-			return fmt.Errorf("failed to get file for cache: %s", err)
-		}
-		defer os.Remove(path)
-
-		// Upload to Artifactory using hash as filename
-		err = uploadToArtifactory(path, cacheURL, r.Integrity)
-		if err != nil {
-			return fmt.Errorf("failed to upload to cache: %v", err)
-		}
+	// Upload to Artifactory using hash as filename
+	err = uploadToArtifactory(path, cacheURL, r.Integrity)
+	if err != nil {
+		return fmt.Errorf("failed to upload to cache: %v", err)
 	}
 
 	l.conf.Resource = append(l.conf.Resource, *r)
@@ -295,36 +294,33 @@ func (l *Lock) Download(dir string, tags []string, notags []string, perm string)
 }
 
 func downloadFromArtifactory(ctx context.Context, cacheURL string, integrity string, filePath string, mode os.FileMode) error {
+	// Check if Artifactory token is set in environment
 	token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
 	if token == "" {
 		return fmt.Errorf("GRABIT_ARTIFACTORY_TOKEN environment variable is not set")
 	}
 
+	// Create the full Artifactory URL using the cache URL and the file's integrity hash
 	artifactoryURL := fmt.Sprintf("%s/%s", cacheURL, integrity)
-
 	req, err := http.NewRequestWithContext(ctx, "GET", artifactoryURL, nil)
 	if err != nil {
 		return err
 	}
 
+	// Add authentication token to request
 	req.Header.Set("Authorization", "Bearer "+token)
-
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
+	// Check if the request to Artifactory was successful
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("failed to download from Artifactory, status code: %d", resp.StatusCode)
 	}
 
-	// If mode is not set, use a default
-	if mode == 0 {
-		mode = 0644
-	}
-
-	// Create a temporary file first
+	// Create a temporary file to download the content into
 	tmpFile, err := os.CreateTemp(filepath.Dir(filePath), "download-*")
 	if err != nil {
 		return err
@@ -332,17 +328,30 @@ func downloadFromArtifactory(ctx context.Context, cacheURL string, integrity str
 	tmpPath := tmpFile.Name()
 	defer os.Remove(tmpPath)
 
+	// Save the downloaded content into the temporary file
 	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
 		return err
 	}
 	tmpFile.Close()
 
-	// Set permissions on temporary file
+	// Check if the file's hash matches the expected hash
+	algo, err := getAlgoFromIntegrity(integrity)
+	if err != nil {
+		return err
+	}
+	err = checkIntegrityFromFile(tmpPath, algo, integrity, artifactoryURL)
+	if err != nil {
+		// Show a warning if the file validation fails
+		fmt.Printf("Warning: Cache validation failed for %s, falling back to original URL\n", artifactoryURL)
+		return err
+	}
+
+	// Set the permissions for the downloaded file
 	if err := os.Chmod(tmpPath, mode); err != nil {
 		return err
 	}
 
-	// Move to final location
+	// Move the temporary file to the final location
 	return os.Rename(tmpPath, filePath)
 }
 

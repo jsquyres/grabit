@@ -42,6 +42,7 @@ func NewResourceFromUrl(urls []string, algo string, tags []string, filename stri
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute ressource integrity: %s", err)
 	}
+
 	return &Resource{Urls: urls, Integrity: integrity, Tags: tags, Filename: filename, CacheUri: cacheURL}, nil
 }
 
@@ -94,14 +95,14 @@ func (l *Resource) Download(dir string, mode os.FileMode, ctx context.Context) e
 		}
 		resPath := filepath.Join(dir, localName)
 
+		// Try cache download first
 		err := downloadFromArtifactory(ctx, l.CacheUri, l.Integrity, resPath, mode)
 		if err == nil {
-			return nil
+			return nil // Cache download successful
 		}
-		// Return the error and let Lock show the warning
-		return err
+		// If cache fails, just log warning and continue to regular URLs
+		fmt.Printf("Warning: Failed to download from cache, falling back to original URL: %v\n", err)
 	}
-
 	ok := false
 	algo, err := getAlgoFromIntegrity(l.Integrity)
 	if err != nil {
@@ -139,6 +140,11 @@ func (l *Resource) Download(dir string, mode os.FileMode, ctx context.Context) e
 			}
 		}
 		ok = true
+		if l.CacheUri != "" && os.Getenv("NO_CACHE_UPLOAD") != "1" {
+			if uploadErr := uploadToArtifactory(resPath, l.CacheUri, l.Integrity); uploadErr != nil {
+				fmt.Printf("Warning: Failed to upload to cache: %v\n", uploadErr)
+			}
+		}
 	}
 	if !ok {
 		if err == nil {
