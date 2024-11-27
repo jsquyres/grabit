@@ -73,18 +73,19 @@ func (l *Lock) AddResource(paths []string, algo string, tags []string, filename 
 		if token == "" {
 			return fmt.Errorf("GRABIT_ARTIFACTORY_TOKEN environment variable is not set")
 		}
-	}
-	// Get file again for upload
-	path, err := GetUrltoTempFile(paths[0], context.Background())
-	if err != nil {
-		return fmt.Errorf("failed to get file for cache: %s", err)
-	}
-	defer os.Remove(path)
 
-	// Upload to Artifactory using hash as filename
-	err = uploadToArtifactory(path, cacheURL, r.Integrity)
-	if err != nil {
-		return fmt.Errorf("failed to upload to cache: %v", err)
+		// Get file again for upload
+		path, err := GetUrltoTempFile(paths[0], context.Background())
+		if err != nil {
+			return fmt.Errorf("failed to get file for cache: %s", err)
+		}
+		defer os.Remove(path)
+
+		// Upload to Artifactory using hash as filename
+		err = uploadToArtifactory(path, cacheURL, r.Integrity)
+		if err != nil {
+			return fmt.Errorf("failed to upload to cache: %v", err)
+		}
 	}
 
 	l.conf.Resource = append(l.conf.Resource, *r)
