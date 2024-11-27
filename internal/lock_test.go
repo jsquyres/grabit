@@ -33,7 +33,6 @@ func TestNewLockValid(t *testing.T) {
 	assert.Equal(t, "sha256-asdasdasd", statement.Integrity)
 	assert.Equal(t, []string{"tag1", "tag2"}, statement.Tags)
 }
-
 func TestLockManipulations(t *testing.T) {
 	path := test.TmpFile(t, `
 	[[Resource]]
