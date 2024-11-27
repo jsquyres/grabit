@@ -137,7 +137,8 @@ func (l *Lock) DeleteResource(path string) {
 		} else if r.Contains(path) && r.CacheUri != "" {
 			token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
 			if token == "" {
-				slog.Warn("Warning: Unable to delete from Artifcatory: GRABIT_ARTIFACTORY_TOKEN not set.")
+				log.Warn().Msg("Warning: Unable to delete from Artifcatory: GRABIT_ARTIFACTORY_TOKEN not set.")
+
 				continue
 			}
 
@@ -145,7 +146,7 @@ func (l *Lock) DeleteResource(path string) {
 
 			err := deleteCache(artifactoryURL, token)
 			if err != nil {
-				slog.Warn("Warning: Unable to delete from Artifcatory")
+				log.Warn().Msg("Warning: Unable to delete from Artifcatory")
 			}
 		}
 	}
