@@ -344,7 +344,7 @@ func downloadFromArtifactory(ctx context.Context, cacheURL string, integrity str
 	err = checkIntegrityFromFile(tmpPath, algo, integrity, artifactoryURL)
 	if err != nil {
 		// Show a warning if the file validation fails
-		fmt.Printf("Warning: Cache validation failed for %s, falling back to original URL\n", artifactoryURL)
+		log.Warn().Msgf("Cache validation failed for %s, falling back to original URL\n", artifactoryURL)
 		return err
 	}
 
