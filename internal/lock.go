@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"os"
 	"path"
@@ -19,6 +18,7 @@ import (
 	"strings"
 
 	toml "github.com/pelletier/go-toml/v2"
+	"github.com/rs/zerolog/log"
 )
 
 var COMMENT_PREFIX = "//"
