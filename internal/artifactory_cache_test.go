@@ -1,207 +1,139 @@
+// artifactory_test.go
 package internal
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/cisco-open/grabit/test"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAddWithArtifactoryCache(t *testing.T) {
-	// Token is not set
 	t.Run("TokenNotSet", func(t *testing.T) {
-		os.Unsetenv("GRABIT_ARTIFACTORY_TOKEN") // Remove the token
-		err := runAddWithCache("http://localhost/test", "http://localhost/artifactory/cache")
-		assert.NotNil(t, err) // Should return an error
-		assert.Contains(t, err.Error(), "GRABIT_ARTIFACTORY_TOKEN environment variable is not set")
-	})
-
-	// Token is invalid
-	t.Run("TokenFails", func(t *testing.T) {
-		os.Setenv("GRABIT_ARTIFACTORY_TOKEN", "invalid-token") // Set an invalid token
-		defer os.Unsetenv("GRABIT_ARTIFACTORY_TOKEN")
-
-		handler := func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusUnauthorized) // Respond with "Unauthorized"
-		}
-		port, server := test.HttpHandler(handler)
-		defer server.Close()
-
-		cacheURL := fmt.Sprintf("http://localhost:%d/cache", port)
-		err := runAddWithCache("http://localhost/test", cacheURL)
-		assert.NotNil(t, err) // Should return an error
-		assert.Contains(t, err.Error(), "failed to authenticate")
-	})
-
-	// Token is valid, upload works
-	t.Run("SuccessfulUpload", func(t *testing.T) {
-		os.Setenv("GRABIT_ARTIFACTORY_TOKEN", "valid-token") // Set a valid token
-		defer os.Unsetenv("GRABIT_ARTIFACTORY_TOKEN")
-
-		handler := func(w http.ResponseWriter, r *http.Request) {
-			assert.Equal(t, "Bearer valid-token", r.Header.Get("Authorization")) // Check the token
-			w.WriteHeader(http.StatusOK)                                         // Respond with "OK"
-		}
-		port, server := test.HttpHandler(handler)
-		defer server.Close()
-
-		cacheURL := fmt.Sprintf("http://localhost:%d/cache", port)
-		err := runAddWithCache("http://localhost/test", cacheURL)
-		assert.Nil(t, err) // Should not return an error
-	})
-}
-
-// Run the "add" operation
-func runAddWithCache(url, cacheURL string) error {
-	token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
-	if token == "" {
-		return fmt.Errorf("GRABIT_ARTIFACTORY_TOKEN environment variable is not set")
-	}
-	if token == "invalid-token" {
-		return fmt.Errorf("failed to authenticate with the provided token")
-	}
-	// Upload works
-	return nil
-}
-
-func TestDownloadWithArtifactoryCache(t *testing.T) {
-	// Token not set
-	t.Run("TokenNotSetWithCacheLine", func(t *testing.T) {
 		os.Unsetenv("GRABIT_ARTIFACTORY_TOKEN")
-		err := runDownloadWithCache("http://localhost/artifactory/cache")
-		assert.NotNil(t, err) // Should return an error
-		assert.Contains(t, err.Error(), "GRABIT_ARTIFACTORY_TOKEN environment variable is not set")
-	})
-
-	// Token is invalid
-	t.Run("TokenInvalidWithCacheLine", func(t *testing.T) {
-		os.Setenv("GRABIT_ARTIFACTORY_TOKEN", "invalid-token")
-		defer os.Unsetenv("GRABIT_ARTIFACTORY_TOKEN")
 
 		handler := func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusUnauthorized) // Respond with "Unauthorized"
+			w.Write([]byte(`test content`))
 		}
 		port, server := test.HttpHandler(handler)
 		defer server.Close()
 
-		err := runDownloadWithCache(fmt.Sprintf("http://localhost:%d/cache", port))
-		assert.NotNil(t, err) // Should return an error
-		assert.Contains(t, err.Error(), "unexpected response status: 401")
-	})
+		path := test.TmpFile(t, "")
+		lock, err := NewLock(path, true)
+		require.NoError(t, err)
 
-	// Validation fails
-	t.Run("CacheValidationFailure", func(t *testing.T) {
-		os.Setenv("GRABIT_ARTIFACTORY_TOKEN", "valid-token")
+		// Use a testing server
+		sourceURL := fmt.Sprintf("http://localhost:%d/test.txt", port)
+		cacheURL := fmt.Sprintf("http://localhost:%d", port)
+
+		err = lock.AddResource([]string{sourceURL}, "sha256", []string{}, "", cacheURL)
+		assert.Contains(t, err.Error(), "GRABIT_ARTIFACTORY_TOKEN environment variable is not set")
+	})
+}
+func TestDownloadWithArtifactoryCache(t *testing.T) {
+	t.Run("NO_CACHE_UPLOAD", func(t *testing.T) {
+		// Turn on NO_CACHE_UPLOAD setting
+		os.Setenv("NO_CACHE_UPLOAD", "1")
+		defer os.Unsetenv("NO_CACHE_UPLOAD")
+
+		testContent := []byte("test content")
+		hash := sha256.Sum256(testContent)
+		expectedHash := "sha256-" + base64.StdEncoding.EncodeToString(hash[:])
+
+		// Start a test server
+		uploadAttempted := false
+		handler := func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == "PUT" {
+				uploadAttempted = true
+				t.Error("Should not attempt upload when NO_CACHE_UPLOAD is set")
+			}
+			w.Write(testContent)
+		}
+		port, server := test.HttpHandler(handler)
+		defer server.Close()
+
+		// Make a test folder
+		tmpDir := test.TmpDir(t)
+
+		// Make a test lock file with a cache URL and correct hash
+		lockContent := fmt.Sprintf(`[[Resource]]
+            Urls = ['http://localhost:%d/test.txt']
+            Integrity = '%s'
+            CacheUri = 'http://localhost:%d/cache'`, port, expectedHash, port)
+
+		// Set up the lock file
+		lockPath := test.TmpFile(t, lockContent)
+		lock, err := NewLock(lockPath, false)
+		require.NoError(t, err)
+
+		// Check the download process
+		err = lock.Download(tmpDir, []string{}, []string{}, "")
+		assert.NoError(t, err)
+
+		// Make sure no upload happened
+		assert.False(t, uploadAttempted)
+
+		// Make sure the file downloaded properly
+		downloadedFile := filepath.Join(tmpDir, "test.txt")
+		assert.FileExists(t, downloadedFile)
+
+		// Make sure the content is the same
+		content, err := os.ReadFile(downloadedFile)
+		require.NoError(t, err)
+		assert.Equal(t, testContent, content)
+	})
+}
+
+func TestDeleteWithArtifactoryCache(t *testing.T) {
+	t.Run("SuccessfulDelete", func(t *testing.T) {
+		os.Setenv("GRABIT_ARTIFACTORY_TOKEN", "test-token")
 		defer os.Unsetenv("GRABIT_ARTIFACTORY_TOKEN")
 
+		// Start the test server
 		handler := func(w http.ResponseWriter, r *http.Request) {
-			if r.Method == "GET" {
+			if r.Method == "DELETE" {
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("invalid content")) // Respond with wrong content
 			}
 		}
 		port, server := test.HttpHandler(handler)
 		defer server.Close()
 
-		cacheURL := fmt.Sprintf("http://localhost:%d/cache", port)
-		err := runDownloadWithCache(cacheURL)
-		assert.Error(t, err) // Should return an error
-		assert.Contains(t, err.Error(), "validation failed")
+		url := fmt.Sprintf("http://localhost:%d/test.txt", port)
+		cacheUrl := fmt.Sprintf("http://localhost:%d", port)
+
+		tmpDir := test.TmpDir(t)
+		lockContent := fmt.Sprintf(`[[Resource]]
+            Urls = ['%s']
+            Integrity = 'sha256-test'
+            CacheUri = '%s'`, url, cacheUrl)
+
+		lockPath := filepath.Join(tmpDir, "grabit.lock")
+		err := os.WriteFile(lockPath, []byte(lockContent), 0644)
+		require.NoError(t, err)
+
+		lock, err := NewLock(lockPath, false)
+		require.NoError(t, err)
+
+		// Keep the starting state
+		err = lock.Save()
+		require.NoError(t, err)
+
+		lock.DeleteResource(url)
+
+		// Keep the updates
+		err = lock.Save()
+		require.NoError(t, err)
+
+		// Make sure the resource was deleted
+		newLock, err := NewLock(lockPath, false)
+		require.NoError(t, err)
+		assert.Equal(t, 0, len(newLock.conf.Resource))
 	})
-
-	// No cache line in file
-	t.Run("CacheLineNotInLockFile", func(t *testing.T) {
-		os.Setenv("GRABIT_ARTIFACTORY_TOKEN", "valid-token")
-		defer os.Unsetenv("GRABIT_ARTIFACTORY_TOKEN")
-
-		err := runDownloadWithCache("") // Empty cache URL
-		assert.NoError(t, err)          // Should work without an error
-	})
-
-	// Validation passes
-	t.Run("CacheValidationPasses", func(t *testing.T) {
-		os.Setenv("GRABIT_ARTIFACTORY_TOKEN", "valid-token")
-		defer os.Unsetenv("GRABIT_ARTIFACTORY_TOKEN")
-
-		handler := func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("expected content")) // Correct content
-		}
-		port, server := test.HttpHandler(handler)
-		defer server.Close()
-
-		cacheURL := fmt.Sprintf("http://localhost:%d/cache", port)
-		err := runDownloadWithCache(cacheURL)
-		assert.Nil(t, err) // Should not return an error
-	})
-
-	// Skip cache operations
-	t.Run("NO_CACHE_UPLOADFallback", func(t *testing.T) {
-		os.Setenv("NO_CACHE_UPLOAD", "1")
-		defer os.Unsetenv("NO_CACHE_UPLOAD")
-
-		handler := func(w http.ResponseWriter, r *http.Request) {
-			t.Error("Should not upload when NO_CACHE_UPLOAD is set")
-		}
-		port, server := test.HttpHandler(handler)
-		defer server.Close()
-
-		err := runDownloadWithCache(fmt.Sprintf("http://localhost:%d/cache", port))
-		assert.NoError(t, err) // Should work without an error
-	})
-}
-
-// Simulated download
-func runDownloadWithCache(cacheURL string) error {
-	// Skip cache if NO_CACHE_UPLOAD
-	if os.Getenv("NO_CACHE_UPLOAD") == "1" {
-		fmt.Println("NO_CACHE_UPLOAD is set, skipping cache operations.")
-		return nil
-	}
-
-	// Check token
-	token := os.Getenv("GRABIT_ARTIFACTORY_TOKEN")
-	if token == "" {
-		return fmt.Errorf("GRABIT_ARTIFACTORY_TOKEN environment variable is not set")
-	}
-
-	// Handle missing cache URL
-	if cacheURL == "" {
-		fmt.Println("No cache URL provided, falling back to direct download.")
-		return nil
-	}
-
-	// Make request
-	req, err := http.NewRequest("GET", cacheURL, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %v", err)
-	}
-
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to perform request: %v", err)
-	}
-	defer resp.Body.Close()
-
-	// Check response
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected response status: %d", resp.StatusCode)
-	}
-
-	// Validate content
-	buf := make([]byte, 1024)
-	n, _ := resp.Body.Read(buf)
-	content := string(buf[:n])
-
-	if content != "expected content" {
-		return fmt.Errorf("validation failed for cache URL: %s", cacheURL)
-	}
-
-	return nil
 }
