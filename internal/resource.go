@@ -115,7 +115,7 @@ func (l *Resource) Download(dir string, mode os.FileMode, ctx context.Context) e
 		lpath, err := GetUrlToDir(u, dir, ctx)
 		if err != nil {
 			downloadError = err
-			break
+			continue
 		}
 		err = checkIntegrityFromFile(lpath, algo, l.Integrity, u)
 		if err != nil {
