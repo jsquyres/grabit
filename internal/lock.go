@@ -5,8 +5,9 @@ package internal
 
 import (
 	"bufio"
-	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/carlmjohnson/requests"
 	toml "github.com/pelletier/go-toml/v2"
 	"github.com/rs/zerolog/log"
 )
@@ -98,32 +100,27 @@ func uploadToArtifactory(filePath, cacheURL, integrity string) error {
 		return fmt.Errorf("GRABIT_ARTIFACTORY_TOKEN environment variable is not set")
 	}
 
-	// Read file
+	// Read the content of the file
 	fileContent, err := os.ReadFile(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to read file: %v", err)
 	}
 
-	artifactoryURL := fmt.Sprintf("%s/%s", cacheURL, integrity)
+	// Compute the SHA256 hash and generate the Artifactory URL
+	hash := sha256.Sum256(fileContent)
+	hexHash := fmt.Sprintf("sha256-%s", hex.EncodeToString(hash[:]))
+	artifactoryURL := fmt.Sprintf("%s/%s", cacheURL, hexHash)
 
-	// Create upload request
-	req, err := http.NewRequest("PUT", artifactoryURL, bytes.NewReader(fileContent))
+	// Upload the file using the requests package
+	err = requests.
+		URL(artifactoryURL).
+		Method(http.MethodPut).
+		Header("Authorization", fmt.Sprintf("Bearer %s", token)).
+		BodyBytes(fileContent).
+		Fetch(context.Background())
+
 	if err != nil {
-		return fmt.Errorf("failed to create request: %v", err)
-	}
-
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/octet-stream")
-
-	// Do upload
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to upload: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("upload failed with status: %d", resp.StatusCode)
+		return fmt.Errorf("upload failed: %w", err)
 	}
 
 	return nil
@@ -154,15 +151,12 @@ func (l *Lock) DeleteResource(path string) {
 }
 
 func deleteCache(url, token string) error {
-	req, err := http.NewRequest("DELETE", url, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	client := &http.Client{}
-	resp, err := client.Do(req)
-
-	defer resp.Body.Close()
+	// Create and send a DELETE request with an Authorization header.
+	err := requests.
+		URL(url).                                                 // Target URL for the DELETE request.
+		Method(http.MethodDelete).                                // Set HTTP method to DELETE.
+		Header("Authorization", fmt.Sprintf("Bearer %s", token)). // Add token in the Authorization header.
+		Fetch(context.Background())                               // Execute the request.
 
 	if err != nil {
 		return err
